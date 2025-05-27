@@ -101,3 +101,30 @@ a, .btn-link {
 code {
     color: #c02d76;
 }
+
+
+button {
+    border: 1px solid #ccc;
+    background-color: #f0f0f0;
+    cursor: pointer;
+    padding: 10px;
+}
+
+    button:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+    }
+
+    button:hover:not(:disabled) {
+        background-color: #e0e0e0;
+    }
+
+input {
+    margin: 5px;
+    padding: 5px;
+}
+
+select {
+    margin: 5px;
+    padding: 5px;
+}

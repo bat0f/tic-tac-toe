@@ -1,278 +1,332 @@
-﻿using Microsoft.AspNetCore.SignalR;
-using System.Collections.Concurrent;
+﻿// Обновлённый GameHub.cs
+using Microsoft.AspNetCore.SignalR;
 using System.Text.RegularExpressions;
 
 namespace tic_tac_toe_api.Hubs
 {
     public class GameHub : Hub
     {
-        private static readonly ConcurrentDictionary<string, GameSession> _games = new();
-        private static readonly ConcurrentDictionary<string, (string Difficulty, int LineLength)> _waitingPlayers = new();
+        private static readonly List<(string ConnectionId, string Username, string Difficulty, int LineLength)> waitingPlayers = new();
+        private static readonly Dictionary<string, GameSession> activeGames = new();
+        private readonly ILogger<GameHub> _logger;
+
+        public GameHub(ILogger<GameHub> logger)
+        {
+            _logger = logger;
+        }
 
         public async Task JoinGame(string username, string difficulty, int lineLength)
         {
-            var opponent = _waitingPlayers.FirstOrDefault(p =>
-                p.Value.Difficulty == difficulty && p.Value.LineLength == lineLength && p.Key != username);
+            _logger.LogInformation($"Игрок {username} пытается присоединиться с difficulty={difficulty}, lineLength={lineLength}");
 
-            if (opponent.Key != null)
+            var opponent = waitingPlayers.FirstOrDefault(p => !string.Equals(p.Username, username, StringComparison.OrdinalIgnoreCase) && p.Difficulty == difficulty && p.LineLength == lineLength);
+
+            if (opponent.Username == null)
             {
-                _waitingPlayers.TryRemove(opponent.Key, out _);
-                var gameId = Guid.NewGuid().ToString();
-                var session = new GameSession
-                {
-                    Player1 = opponent.Key,
-                    Player2 = username,
-                    Difficulty = difficulty,
-                    LineLength = lineLength,
-                    Board = CreateBoard(lineLength),
-                    CurrentPlayer = opponent.Key,
-                    SymbolMap = new Dictionary<string, char> { { opponent.Key, 'X' }, { username, 'O' } }
-                };
-                _games.TryAdd(gameId, session);
-
-                await Groups.AddToGroupAsync(Context.ConnectionId, gameId);
-                await Groups.AddToGroupAsync(_waitingPlayers.First(p => p.Key == opponent.Key).Key, gameId);
-
-                await Clients.Group(gameId).SendAsync("GameStarted", gameId, session.Player1, session.Player2, session.SymbolMap);
-                await SendMathTask(gameId, session.CurrentPlayer);
+                _logger.LogInformation($"Оппонент не найден. Игрок {username} добавлен в ожидание.");
+                waitingPlayers.Add((Context.ConnectionId, username, difficulty, lineLength));
+                await Clients.Caller.SendAsync("WaitingForOpponent");
             }
             else
             {
-                _waitingPlayers.TryAdd(username, (difficulty, lineLength));
-                await Clients.Caller.SendAsync("WaitingForOpponent");
+                _logger.LogInformation($"Найден оппонент: {opponent.Username}");
+                waitingPlayers.RemoveAll(p => string.Equals(p.Username, opponent.Username, StringComparison.OrdinalIgnoreCase));
+
+                var gameId = $"{username}-{opponent.Username}";
+                int boardSize = lineLength == 3 ? 6 : lineLength == 4 ? 8 : 10;
+
+                var session = new GameSession
+                {
+                    GameId = gameId,
+                    Player1 = username,
+                    Player2 = opponent.Username,
+                    CurrentPlayer = username,
+                    BoardSize = boardSize,
+                    LineLength = lineLength,
+                    Board = CreateEmptyBoard(boardSize)
+                };
+                activeGames[gameId] = session;
+
+                var symbolMap = new Dictionary<string, char>
+                {
+                    { username, 'X' },
+                    { opponent.Username, 'O' }
+                };
+
+                await Groups.AddToGroupAsync(Context.ConnectionId, gameId);
+                await Groups.AddToGroupAsync(opponent.ConnectionId, gameId);
+
+                _logger.LogInformation($"Игра началась: {gameId}, Player1: {username}, Player2: {opponent.Username}");
+
+                await Clients.Group(gameId).SendAsync("GameStarted", gameId, username, opponent.Username, symbolMap);
+                await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer);
             }
         }
 
-        public async Task MakeMove(string gameId, string username, int row, int col, int? answer)
+        public async Task MakeMove(string gameId, string username, int row, int col)
         {
-            if (!_games.TryGetValue(gameId, out var session) || session.CurrentPlayer != username)
-                return;
+            _logger.LogInformation($"MakeMove вызван с gameId={gameId}, username={username}, row={row}, col={col}");
 
-            // Проверка задачи
-            if (answer != session.CurrentTask?.Answer)
+            if (!activeGames.TryGetValue(gameId, out var session))
             {
-                await Clients.Group(gameId).SendAsync("InvalidAnswer", username);
-                session.CurrentPlayer = session.Player1 == username ? session.Player2 : session.Player1;
-                await SendMathTask(gameId, session.CurrentPlayer);
+                _logger.LogWarning($"Игра {gameId} не найдена.");
                 return;
             }
 
-            // Проверка хода
-            if (session.Board[row, col] != '\0')
-                return;
+            _logger.LogInformation($"Текущий игрок в игре: {session.CurrentPlayer}");
 
-            session.Board[row, col] = session.SymbolMap[username];
-            await Clients.Group(gameId).SendAsync("MoveMade", username, row, col, session.SymbolMap[username]);
-
-            // Проверка победы
-            if (CheckWin(session.Board, session.SymbolMap[username], session.LineLength))
+            if (!string.Equals(session.CurrentPlayer, username, StringComparison.OrdinalIgnoreCase))
             {
+                _logger.LogWarning($"Не ваш ход, {username}!");
+                await Clients.Caller.SendAsync("NotYourTurn", username);
+                return;
+            }
+
+            if (row < 0 || col < 0 || row >= session.BoardSize || col >= session.BoardSize)
+            {
+                _logger.LogWarning($"Ход вне границ доски: ({row}, {col})");
+                return;
+            }
+
+            if (session.Board[row][col] != '\0')
+            {
+                _logger.LogWarning($"Ячейка ({row}, {col}) уже занята!");
+                await Clients.Caller.SendAsync("CellOccupied", row, col);
+                return;
+            }
+
+            char symbol = string.Equals(username, session.Player1, StringComparison.OrdinalIgnoreCase) ? 'X' : 'O';
+            session.Board[row][col] = symbol;
+
+            var nextPlayer = string.Equals(username, session.Player1, StringComparison.OrdinalIgnoreCase) ? session.Player2 : session.Player1;
+            session.CurrentPlayer = nextPlayer;
+
+            _logger.LogInformation($"Ход сделан: {username} ({symbol}) в ({row}, {col}). Следующий игрок: {nextPlayer}");
+
+            await Clients.Group(gameId).SendAsync("MoveMade", username, row, col, symbol);
+            await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer);
+
+            if (CheckWin(session, row, col, symbol))
+            {
+                _logger.LogInformation($"{username} победил!");
+                activeGames.Remove(gameId);
                 await Clients.Group(gameId).SendAsync("GameOver", username, "win");
-                _games.TryRemove(gameId, out _);
-                return;
             }
-
-            // Проверка ничьей
-            if (session.Board.Cast<char>().All(c => c != '\0'))
+            else if (CheckDraw(session))
             {
+                _logger.LogInformation("Ничья!");
+                activeGames.Remove(gameId);
                 await Clients.Group(gameId).SendAsync("GameOver", null, "draw");
-                _games.TryRemove(gameId, out _);
-                return;
             }
-
-            session.CurrentPlayer = session.Player1 == username ? session.Player2 : session.Player1;
-            await SendMathTask(gameId, session.CurrentPlayer);
         }
 
-        private async Task SendMathTask(string gameId, string player)
+        private bool CheckWin(GameSession session, int row, int col, char symbol)
         {
-            if (!_games.TryGetValue(gameId, out var session))
-                return;
+            int boardSize = session.BoardSize;
+            var board = session.Board;
+            int lineLength = session.LineLength;
 
-            var task = GenerateMathTask(session.Difficulty);
-            session.CurrentTask = task;
-            await Clients.Group(gameId).SendAsync("NewTask", player, task.Expression);
-        }
+            int count;
 
-        private char[,] CreateBoard(int lineLength)
-        {
-            int size = lineLength == 3 ? 6 : lineLength == 4 ? 8 : 10;
-            return new char[size, size];
-        }
-
-        private bool CheckWin(char[,] board, char symbol, int lineLength)
-        {
-            int size = board.GetLength(0);
-
-            // Горизонтали
-            for (int i = 0; i < size; i++)
+            // Горизонталь
+            count = 0;
+            for (int j = 0; j < boardSize; j++)
             {
-                for (int j = 0; j <= size - lineLength; j++)
-                {
-                    bool win = true;
-                    for (int k = 0; k < lineLength; k++)
-                    {
-                        if (board[i, j + k] != symbol)
-                        {
-                            win = false;
-                            break;
-                        }
-                    }
-                    if (win) return true;
-                }
+                if (board[row][j] == symbol) count++;
+                else count = 0;
+                if (count >= lineLength) return true;
             }
 
-            // Вертикали
-            for (int i = 0; i <= size - lineLength; i++)
+            // Вертикаль
+            count = 0;
+            for (int i = 0; i < boardSize; i++)
             {
-                for (int j = 0; j < size; j++)
-                {
-                    bool win = true;
-                    for (int k = 0; k < lineLength; k++)
-                    {
-                        if (board[i + k, j] != symbol)
-                        {
-                            win = false;
-                            break;
-                        }
-                    }
-                    if (win) return true;
-                }
+                if (board[i][col] == symbol) count++;
+                else count = 0;
+                if (count >= lineLength) return true;
             }
 
-            // Главные диагонали (слева направо)
-            for (int i = 0; i <= size - lineLength; i++)
+            // Главная диагональ
+            count = 0;
+            int startRow = row - Math.Min(row, col);
+            int startCol = col - Math.Min(row, col);
+            for (int i = startRow, j = startCol; i < boardSize && j < boardSize; i++, j++)
             {
-                for (int j = 0; j <= size - lineLength; j++)
-                {
-                    bool win = true;
-                    for (int k = 0; k < lineLength; k++)
-                    {
-                        if (board[i + k, j + k] != symbol)
-                        {
-                            win = false;
-                            break;
-                        }
-                    }
-                    if (win) return true;
-                }
+                if (board[i][j] == symbol) count++;
+                else count = 0;
+                if (count >= lineLength) return true;
             }
 
-            // Побочные диагонали (справа налево)
-            for (int i = 0; i <= size - lineLength; i++)
+            // Побочная диагональ
+            count = 0;
+            startRow = row - Math.Min(row, boardSize - 1 - col);
+            startCol = col + Math.Min(row, boardSize - 1 - col);
+            for (int i = startRow, j = startCol; i < boardSize && j >= 0; i++, j--)
             {
-                for (int j = lineLength - 1; j < size; j++)
-                {
-                    bool win = true;
-                    for (int k = 0; k < lineLength; k++)
-                    {
-                        if (board[i + k, j - k] != symbol)
-                        {
-                            win = false;
-                            break;
-                        }
-                    }
-                    if (win) return true;
-                }
+                if (board[i][j] == symbol) count++;
+                else count = 0;
+                if (count >= lineLength) return true;
             }
 
             return false;
         }
 
-        private MathTask GenerateMathTask(string difficulty)
+        private bool CheckDraw(GameSession session)
         {
-            var rand = new Random();
-            int num1, num2, num3;
-            string expression;
-            int answer;
-
-            switch (difficulty.ToLower())
+            for (int i = 0; i < session.BoardSize; i++)
             {
-                case "easy":
-                    num1 = rand.Next(1, 101);
-                    num2 = rand.Next(1, 101);
-                    bool isSubtraction = rand.Next(0, 2) == 0 && num1 >= num2;
-                    expression = isSubtraction ? $"{num1} − {num2}" : $"{num1} + {num2}";
-                    answer = isSubtraction ? num1 - num2 : num1 + num2;
-                    break;
-
-                case "medium":
-                    if (rand.Next(0, 2) == 0) // Одна операция (умножение или деление)
-                    {
-                        num1 = rand.Next(1, 201);
-                        num2 = rand.Next(1, 21);
-                        bool isDivision = rand.Next(0, 2) == 0;
-                        if (isDivision)
-                        {
-                            num1 = num1 * num2; // Гарантируем целое число
-                            expression = $"{num1} ÷ {num2}";
-                            answer = num1 / num2;
-                        }
-                        else
-                        {
-                            expression = $"{num1} × {num2}";
-                            answer = num1 * num2;
-                        }
-                    }
-                    else // Две операции (сложение/вычитание)
-                    {
-                        num1 = rand.Next(1, 201);
-                        num2 = rand.Next(1, 201);
-                        num3 = rand.Next(1, 101);
-                        bool subtractFirst = rand.Next(0, 2) == 0 && num1 >= num2;
-                        expression = subtractFirst ? $"{num1} − {num2} + {num3}" : $"{num1} + {num2} − {num3}";
-                        answer = subtractFirst ? (num1 - num2) + num3 : (num1 + num2) - num3;
-                    }
-                    break;
-
-                case "hard":
-                    num1 = rand.Next(1, 201);
-                    num2 = rand.Next(1, 201);
-                    num3 = rand.Next(1, 21);
-                    bool useBrackets = rand.Next(0, 2) == 0; // 50% задач со скобками
-                    bool isNegative = rand.Next(0, 100) < 15; // 15% отрицательных результатов
-                    if (useBrackets)
-                    {
-                        bool subtractInBrackets = rand.Next(0, 2) == 0 && num2 >= num3;
-                        expression = subtractInBrackets ? $"{num1} × ({num2} − {num3})" : $"{num1} × ({num2} + {num3})";
-                        answer = subtractInBrackets ? num1 * (num2 - num3) : num1 * (num2 + num3);
-                    }
-                    else
-                    {
-                        bool multiplyFirst = rand.Next(0, 2) == 0;
-                        expression = multiplyFirst ? $"{num1} + {num2} × {num3}" : $"{num1} × {num2} + {num3}";
-                        answer = multiplyFirst ? num1 + (num2 * num3) : (num1 * num2) + num3;
-                    }
-                    if (isNegative)
-                    {
-                        expression = $"({expression}) − {answer + rand.Next(1, 51)}";
-                        answer = answer - (answer + rand.Next(1, 51));
-                    }
-                    break;
-
-                default:
-                    throw new ArgumentException("Неверный уровень сложности.");
+                for (int j = 0; j < session.BoardSize; j++)
+                {
+                    if (session.Board[i][j] == '\0') return false;
+                }
             }
+            return true;
+        }
 
-            return new MathTask { Expression = expression, Answer = answer };
+        private char[][] CreateEmptyBoard(int size)
+        {
+            var newBoard = new char[size][];
+            for (int i = 0; i < size; i++)
+            {
+                newBoard[i] = new char[size];
+            }
+            return newBoard;
+        }
+
+        // Сохраняем твой чат
+        public async Task SendMessage(string user, string message)
+        {
+            await Clients.All.SendAsync("ReceiveMessage", user, message);
         }
     }
 
     public class GameSession
     {
-        public string Player1 { get; set; } = string.Empty;
-        public string Player2 { get; set; } = string.Empty;
-        public string Difficulty { get; set; } = string.Empty;
+        public string GameId { get; set; }
+        public string Player1 { get; set; }
+        public string Player2 { get; set; }
+        public string CurrentPlayer { get; set; }
+        public char[][] Board { get; set; }
+        public int BoardSize { get; set; }
         public int LineLength { get; set; }
-        public char[,] Board { get; set; }
-        public string CurrentPlayer { get; set; } = string.Empty;
-        public Dictionary<string, char> SymbolMap { get; set; } = new();
-        public MathTask? CurrentTask { get; set; }
-    }
-
-    public class MathTask
-    {
-        public string Expression { get; set; } = string.Empty;
-        public int Answer { get; set; }
     }
 }
+
+
+
+
+
+
+//---
+
+//using Microsoft.AspNetCore.SignalR;
+//using System.Threading.Tasks;
+//namespace tic_tac_toe_api.Hubs{
+//    public class GameHub : Hub
+//    {
+//        public async Task SendMessage(string user, string message)
+//        {
+//            await Clients.All.SendAsync("ReceiveMessage", user, message);
+//        }
+//    }
+//}
+
+//using Microsoft.AspNetCore.SignalR;
+//using Microsoft.Extensions.Logging;
+//using System.Collections.Concurrent;
+
+//namespace tic_tac_toe_api.Hubs
+//{
+//    public class GameHub : Hub
+//    {
+//        private readonly ILogger<GameHub> _logger;
+//        private static readonly ConcurrentDictionary<string, (string ConnectionId, string Username)> _waitingPlayers = new();
+//        private static readonly ConcurrentDictionary<string, GameSession> _games = new();
+
+//        public GameHub(ILogger<GameHub> logger)
+//        {
+//            _logger = logger;
+//        }
+
+//        public async Task JoinGame(string username)
+//        {
+//            _logger.LogInformation("Игрок {Username} (ConnectionId: {ConnectionId}) пытается присоединиться", username, Context.ConnectionId);
+
+//            string? opponentKey = null;
+//            string? opponentConnectionId = null;
+//            foreach (var player in _waitingPlayers)
+//            {
+//                if (player.Key != username)
+//                {
+//                    opponentKey = player.Key;
+//                    opponentConnectionId = player.Value.ConnectionId;
+//                    break;
+//                }
+//            }
+
+//            if (opponentKey != null && opponentConnectionId != null)
+//            {
+//                _logger.LogInformation("Найден оппонент: {Opponent} (ConnectionId: {OpponentConnectionId})", opponentKey, opponentConnectionId);
+//                _waitingPlayers.TryRemove(opponentKey, out _);
+
+//                var gameId = Guid.NewGuid().ToString();
+//                var session = new GameSession
+//                {
+//                    Player1 = opponentKey,
+//                    Player2 = username,
+//                    Board = new char[3, 3],
+//                    CurrentPlayer = opponentKey,
+//                    SymbolMap = new Dictionary<string, char> { { opponentKey, 'X' }, { username, 'O' } }
+//                };
+//                _games.TryAdd(gameId, session);
+
+//                await Groups.AddToGroupAsync(opponentConnectionId, gameId);
+//                await Groups.AddToGroupAsync(Context.ConnectionId, gameId);
+
+//                _logger.LogInformation("Игра началась: {GameId}, Player1: {Player1}, Player2: {Player2}", gameId, opponentKey, username);
+//                await Clients.Group(gameId).SendAsync("GameStarted", gameId, session.Player1, session.Player2, session.SymbolMap);
+//            }
+//            else
+//            {
+//                _logger.LogInformation("Оппонент не найден. Игрок {Username} добавлен в ожидание.", username);
+//                _waitingPlayers.TryAdd(username, (Context.ConnectionId, username));
+//                await Clients.Caller.SendAsync("WaitingForOpponent");
+//            }
+//        }
+
+//        public async Task MakeMove(string gameId, string username, int row, int col)
+//        {
+//            if (!_games.TryGetValue(gameId, out var session) || session.CurrentPlayer != username)
+//            {
+//                _logger.LogWarning("Невалидный ход: игра не найдена или не твой ход. GameId: {GameId}, Username: {Username}", gameId, username);
+//                return;
+//            }
+
+//            if (session.Board[row, col] != '\0')
+//            {
+//                _logger.LogWarning("Клетка занята: row={Row}, col={Col}", row, col);
+//                return;
+//            }
+
+//            session.Board[row, col] = session.SymbolMap[username];
+//            _logger.LogInformation("Ход сделан: {Username} поставил {Symbol} на row={Row}, col={Col}", username, session.SymbolMap[username], row, col);
+//            await Clients.Group(gameId).SendAsync("MoveMade", username, row, col, session.SymbolMap[username]);
+
+//            // Переключаем игрока
+//            session.CurrentPlayer = session.Player1 == username ? session.Player2 : session.Player1;
+//        }
+//        public async Task SendMessage(string user, string message)
+//        {
+//            await Clients.All.SendAsync("ReceiveMessage", user, message);
+//        }
+//    }
+
+//    public class GameSession
+//    {
+//        public string Player1 { get; set; } = string.Empty;
+//        public string Player2 { get; set; } = string.Empty;
+//        public char[,] Board { get; set; }
+//        public string CurrentPlayer { get; set; } = string.Empty;
+//        public Dictionary<string, char> SymbolMap { get; set; } = new();
+//    }
+//}

@@ -4,20 +4,19 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using tic_tac_toe_api.Data;
 using tic_tac_toe_api.Hubs;
-using tic_tac_toe_api.Data;
-using tic_tac_toe_api.Hubs;
 using System.Security.Cryptography.X509Certificates;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.WebHost.ConfigureKestrel(serverOptions =>
 {
-    serverOptions.ListenAnyIP(5001, listenOptions =>
+    serverOptions.Listen(IPAddress.Any, 5001, options =>
     {
-        listenOptions.UseHttps(new X509Certificate2("cert.pfx", "ZD0dCR8jvG5dBp1kJ0TJX8cK4O0aCuEKGPNTQ3MsvdpdB4t0ffBbgmECShTmwYYsz"));
+        options.UseHttps("server.pfx", "ZD0dCR8jvG5dBp1kJ0TJX8cK4O0aCuEKGPNTQ3MsvdpdB4t0ffBbgmECShTmwYYsz");
     });
 });
-
+//UseHttps(new X509Certificate2("server.pfx", "ZD0dCR8jvG5dBp1kJ0TJX8cK4O0aCuEKGPNTQ3MsvdpdB4t0ffBbgmECShTmwYYsz"));
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite("Data Source=game.db"));
 
@@ -41,17 +40,25 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Добавляем логирование
+builder.Services.AddLogging(logging =>
+{
+    logging.AddConsole();
+    logging.SetMinimumLevel(LogLevel.Debug);
+});
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("AllowClient", policy =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyMethod()
+        policy.WithOrigins("https://26.171.188.146:7056") // Указываем строго клиент
               .AllowAnyHeader()
-              .SetIsOriginAllowed(_ => true);
+              .AllowAnyMethod()
+              .AllowCredentials(); // Важно для SignalR
     });
 });
+
+
 
 var app = builder.Build();
 
@@ -61,12 +68,13 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseCors("AllowAll");
+app.MapHub<GameHub>("/gameHub").RequireCors("AllowClient");
+app.UseCors("AllowClient");
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapHub<GameHub>("/gameHub");
+
 
 
 app.Run();

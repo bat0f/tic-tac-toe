@@ -1,5 +1,6 @@
-using Microsoft.AspNetCore.Components.Web;
+﻿
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
+using Microsoft.AspNetCore.SignalR.Client;
 
 namespace tic_tac_toe_ui
 {
@@ -10,7 +11,18 @@ namespace tic_tac_toe_ui
             var builder = WebAssemblyHostBuilder.CreateDefault(args);
             builder.RootComponents.Add<App>("#app");
 
-            builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri("https://26.171.188.146:5001/") });
+            builder.Services.AddScoped(sp =>
+    new HubConnectionBuilder()
+        .WithUrl("https://26.171.188.146:5001/gameHub", options =>
+        {
+            options.HttpMessageHandlerFactory = handler => new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            };
+
+            options.Headers.Add("X-Custom-Header", "value"); // если надо
+            options.UseDefaultCredentials = true; // 🟢 Это аналог withCredentials = true
+        }).Build());
 
             await builder.Build().RunAsync();
         }
