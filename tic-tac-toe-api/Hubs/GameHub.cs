@@ -1,6 +1,6 @@
-﻿// Обновлённый GameHub.cs
-using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.SignalR;
 using System.Text.RegularExpressions;
+using System.Collections.Generic;
 
 namespace tic_tac_toe_api.Hubs
 {
@@ -9,6 +9,7 @@ namespace tic_tac_toe_api.Hubs
         private static readonly List<(string ConnectionId, string Username, string Difficulty, int LineLength)> waitingPlayers = new();
         private static readonly Dictionary<string, GameSession> activeGames = new();
         private readonly ILogger<GameHub> _logger;
+        private readonly Random random = new Random();
 
         public GameHub(ILogger<GameHub> logger)
         {
@@ -43,7 +44,9 @@ namespace tic_tac_toe_api.Hubs
                     CurrentPlayer = username,
                     BoardSize = boardSize,
                     LineLength = lineLength,
-                    Board = CreateEmptyBoard(boardSize)
+                    Difficulty = difficulty,
+                    Board = CreateEmptyBoard(boardSize),
+                    UsedTasks = new HashSet<string>()
                 };
                 activeGames[gameId] = session;
 
@@ -59,7 +62,7 @@ namespace tic_tac_toe_api.Hubs
                 _logger.LogInformation($"Игра началась: {gameId}, Player1: {username}, Player2: {opponent.Username}");
 
                 await Clients.Group(gameId).SendAsync("GameStarted", gameId, username, opponent.Username, symbolMap);
-                await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer);
+                await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer, 8, "");
             }
         }
 
@@ -95,29 +98,194 @@ namespace tic_tac_toe_api.Hubs
                 return;
             }
 
-            char symbol = string.Equals(username, session.Player1, StringComparison.OrdinalIgnoreCase) ? 'X' : 'O';
-            session.Board[row][col] = symbol;
+            session.SelectedRow = row;
+            session.SelectedCol = col;
+            session.RoundTask = GenerateUniqueTask(session.Difficulty, session.UsedTasks);
+            session.RoundAnswer = EvaluateTask(session.RoundTask);
+            _logger.LogInformation($"Новая задача раунда: {session.RoundTask}, Ответ: {session.RoundAnswer}");
+            await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer, 15, session.RoundTask);
+        }
+
+        public async Task SubmitAnswer(string gameId, string username, string userAnswer)
+        {
+            _logger.LogInformation($"SubmitAnswer вызван с gameId={gameId}, username={username}, answer={userAnswer}");
+
+            if (!activeGames.TryGetValue(gameId, out var session))
+            {
+                _logger.LogWarning($"Игра {gameId} не найдена.");
+                return;
+            }
+
+            if (!string.Equals(session.CurrentPlayer, username, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning($"Не ваш ход, {username}!");
+                return;
+            }
+
+            bool isCorrect = int.TryParse(userAnswer, out int answer) && answer == session.RoundAnswer;
+            int row = session.SelectedRow;
+            int col = session.SelectedCol;
+
+            if (isCorrect)
+            {
+                _logger.LogInformation($"{username} решил задачу правильно!");
+                char symbol = string.Equals(username, session.Player1, StringComparison.OrdinalIgnoreCase) ? 'X' : 'O';
+                session.Board[row][col] = symbol;
+                await Clients.Group(gameId).SendAsync("MoveMade", username, row, col, symbol);
+                await Clients.Group(gameId).SendAsync("TaskFeedback", "Правильно!");
+
+                if (CheckWin(session, row, col, symbol) || CheckDraw(session))
+                {
+                    if (CheckWin(session, row, col, symbol))
+                    {
+                        _logger.LogInformation($"{username} победил!");
+                        activeGames.Remove(gameId);
+                        await Clients.Group(gameId).SendAsync("GameOver", username, "win");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Ничья!");
+                        activeGames.Remove(gameId);
+                        await Clients.Group(gameId).SendAsync("GameOver", null, "draw");
+                    }
+                }
+                else
+                {
+                    var nextPlayer = string.Equals(username, session.Player1, StringComparison.OrdinalIgnoreCase) ? session.Player2 : session.Player1;
+                    session.CurrentPlayer = nextPlayer;
+                    session.SelectedRow = -1;
+                    session.SelectedCol = -1;
+                    session.RoundMoves++;
+                    session.RoundTask = "";
+                    session.RoundAnswer = 0;
+                    _logger.LogInformation($"Передаём ход: {nextPlayer}, выбор клетки");
+                    await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer, 8, "");
+                }
+            }
+            else
+            {
+                _logger.LogInformation($"{username} решил задачу неправильно.");
+                await Clients.Group(gameId).SendAsync("TaskFeedback", "Неверно, ход передан");
+                var nextPlayer = string.Equals(username, session.Player1, StringComparison.OrdinalIgnoreCase) ? session.Player2 : session.Player1;
+                session.CurrentPlayer = nextPlayer;
+                session.SelectedRow = -1;
+                session.SelectedCol = -1;
+                session.RoundMoves++;
+                session.RoundTask = "";
+                session.RoundAnswer = 0;
+                _logger.LogInformation($"Передаём ход: {nextPlayer}, выбор клетки");
+                await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer, 8, "");
+            }
+        }
+
+        public async Task PassTurn(string gameId, string username)
+        {
+            _logger.LogInformation($"PassTurn вызван с gameId={gameId}, username={username}");
+
+            if (!activeGames.TryGetValue(gameId, out var session))
+            {
+                _logger.LogWarning($"Игра {gameId} не найдена.");
+                return;
+            }
+
+            if (!string.Equals(session.CurrentPlayer, username, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning($"Текущий игрок не {username}, передача хода не требуется.");
+                return;
+            }
 
             var nextPlayer = string.Equals(username, session.Player1, StringComparison.OrdinalIgnoreCase) ? session.Player2 : session.Player1;
             session.CurrentPlayer = nextPlayer;
+            session.SelectedRow = -1;
+            session.SelectedCol = -1;
+            session.RoundMoves++;
+            session.RoundTask = "";
+            session.RoundAnswer = 0;
 
-            _logger.LogInformation($"Ход сделан: {username} ({symbol}) в ({row}, {col}). Следующий игрок: {nextPlayer}");
+            _logger.LogInformation($"Передаём ход: {nextPlayer}, выбор клетки");
+            await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer, 8, "");
+        }
 
-            await Clients.Group(gameId).SendAsync("MoveMade", username, row, col, symbol);
-            await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer);
-
-            if (CheckWin(session, row, col, symbol))
+        private string GenerateUniqueTask(string difficulty, HashSet<string> usedTasks)
+        {
+            string task;
+            do
             {
-                _logger.LogInformation($"{username} победил!");
-                activeGames.Remove(gameId);
-                await Clients.Group(gameId).SendAsync("GameOver", username, "win");
-            }
-            else if (CheckDraw(session))
+                switch (difficulty.ToLower())
+                {
+                    case "easy":
+                        int num1e = random.Next(1, 101);
+                        int num2e = random.Next(1, 101);
+                        string opEasy = random.NextDouble() < 0.5 ? "+" : "-";
+                        task = $"{num1e} {opEasy} {num2e} =";
+                        if (opEasy == "-" && num1e < num2e) { int temp = num1e; num1e = num2e; num2e = temp; task = $"{num1e} {opEasy} {num2e} ="; }
+                        break;
+                    case "medium":
+                        if (random.NextDouble() < 0.5)
+                        {
+                            int num1m = random.Next(1, 101);
+                            int num2m = random.Next(1, num1m + 1);
+                            string opMed = random.NextDouble() < 0.5 ? "×" : "÷";
+                            if (opMed == "÷")
+                            {
+                                while (num1m % num2m != 0) num2m = random.Next(1, num1m + 1);
+                            }
+                            task = $"{num1m} {opMed} {num2m} =";
+                        }
+                        else
+                        {
+                            int num1m2 = random.Next(1, 101);
+                            int num2m2 = random.Next(1, 101 - num1m2);
+                            int num3m2 = random.Next(1, num1m2 + num2m2 + 1);
+                            task = $"{num1m2} + {num2m2} - {num3m2} =";
+                            if (EvaluateTask(task) < 0) num3m2 = random.Next(1, num1m2 + num2m2);
+                        }
+                        break;
+                    case "hard":
+                        int num1h = random.Next(1, 101);
+                        int num2h = random.Next(1, 101);
+                        int num3h = random.Next(1, num2h + 1);
+                        if (random.NextDouble() < 0.5)
+                        {
+                            string op1h = new[] { "+", "-", "×", "÷" }[random.Next(4)];
+                            string op2h = new[] { "+", "-", "×", "÷" }[random.Next(4)];
+                            if (op2h == "÷" && num2h % num3h != 0) while (num2h % num3h != 0) num3h = random.Next(1, num2h + 1);
+                            task = $"{num1h} {op1h} ({num2h} {op2h} {num3h}) =";
+                        }
+                        else
+                        {
+                            string op1h = new[] { "+", "-", "×", "÷" }[random.Next(4)];
+                            string op2h = new[] { "+", "-", "×", "÷" }[random.Next(4)];
+                            if (op2h == "÷" && num2h % num3h != 0) while (num2h % num3h != 0) num3h = random.Next(1, num2h + 1);
+                            task = $"{num1h} {op1h} {num2h} {op2h} {num3h} =";
+                        }
+                        break;
+                    default:
+                        task = "1 + 1 =";
+                        break;
+                }
+            } while (usedTasks.Contains(task) || EvaluateTask(task) < 0);
+            usedTasks.Add(task);
+            return task;
+        }
+
+        private int EvaluateTask(string task)
+        {
+            string[] parts = task.Split(new[] { ' ', '=' }, StringSplitOptions.RemoveEmptyEntries);
+            int result = int.Parse(parts[0]);
+
+            for (int i = 1; i < parts.Length - 1; i += 2)
             {
-                _logger.LogInformation("Ничья!");
-                activeGames.Remove(gameId);
-                await Clients.Group(gameId).SendAsync("GameOver", null, "draw");
+                int nextNum = int.Parse(parts[i + 1]);
+                switch (parts[i])
+                {
+                    case "+": result += nextNum; break;
+                    case "-": result -= nextNum; break;
+                    case "×": result *= nextNum; break;
+                    case "÷": result /= nextNum; break;
+                }
             }
+            return result;
         }
 
         private bool CheckWin(GameSession session, int row, int col, char symbol)
@@ -128,7 +296,6 @@ namespace tic_tac_toe_api.Hubs
 
             int count;
 
-            // Горизонталь
             count = 0;
             for (int j = 0; j < boardSize; j++)
             {
@@ -137,7 +304,6 @@ namespace tic_tac_toe_api.Hubs
                 if (count >= lineLength) return true;
             }
 
-            // Вертикаль
             count = 0;
             for (int i = 0; i < boardSize; i++)
             {
@@ -146,7 +312,6 @@ namespace tic_tac_toe_api.Hubs
                 if (count >= lineLength) return true;
             }
 
-            // Главная диагональ
             count = 0;
             int startRow = row - Math.Min(row, col);
             int startCol = col - Math.Min(row, col);
@@ -157,7 +322,6 @@ namespace tic_tac_toe_api.Hubs
                 if (count >= lineLength) return true;
             }
 
-            // Побочная диагональ
             count = 0;
             startRow = row - Math.Min(row, boardSize - 1 - col);
             startCol = col + Math.Min(row, boardSize - 1 - col);
@@ -193,7 +357,6 @@ namespace tic_tac_toe_api.Hubs
             return newBoard;
         }
 
-        // Сохраняем твой чат
         public async Task SendMessage(string user, string message)
         {
             await Clients.All.SendAsync("ReceiveMessage", user, message);
@@ -209,124 +372,12 @@ namespace tic_tac_toe_api.Hubs
         public char[][] Board { get; set; }
         public int BoardSize { get; set; }
         public int LineLength { get; set; }
+        public string Difficulty { get; set; }
+        public HashSet<string> UsedTasks { get; set; }
+        public string RoundTask { get; set; }
+        public int RoundAnswer { get; set; }
+        public int SelectedRow { get; set; }
+        public int SelectedCol { get; set; }
+        public int RoundMoves { get; set; }
     }
 }
-
-
-
-
-
-
-//---
-
-//using Microsoft.AspNetCore.SignalR;
-//using System.Threading.Tasks;
-//namespace tic_tac_toe_api.Hubs{
-//    public class GameHub : Hub
-//    {
-//        public async Task SendMessage(string user, string message)
-//        {
-//            await Clients.All.SendAsync("ReceiveMessage", user, message);
-//        }
-//    }
-//}
-
-//using Microsoft.AspNetCore.SignalR;
-//using Microsoft.Extensions.Logging;
-//using System.Collections.Concurrent;
-
-//namespace tic_tac_toe_api.Hubs
-//{
-//    public class GameHub : Hub
-//    {
-//        private readonly ILogger<GameHub> _logger;
-//        private static readonly ConcurrentDictionary<string, (string ConnectionId, string Username)> _waitingPlayers = new();
-//        private static readonly ConcurrentDictionary<string, GameSession> _games = new();
-
-//        public GameHub(ILogger<GameHub> logger)
-//        {
-//            _logger = logger;
-//        }
-
-//        public async Task JoinGame(string username)
-//        {
-//            _logger.LogInformation("Игрок {Username} (ConnectionId: {ConnectionId}) пытается присоединиться", username, Context.ConnectionId);
-
-//            string? opponentKey = null;
-//            string? opponentConnectionId = null;
-//            foreach (var player in _waitingPlayers)
-//            {
-//                if (player.Key != username)
-//                {
-//                    opponentKey = player.Key;
-//                    opponentConnectionId = player.Value.ConnectionId;
-//                    break;
-//                }
-//            }
-
-//            if (opponentKey != null && opponentConnectionId != null)
-//            {
-//                _logger.LogInformation("Найден оппонент: {Opponent} (ConnectionId: {OpponentConnectionId})", opponentKey, opponentConnectionId);
-//                _waitingPlayers.TryRemove(opponentKey, out _);
-
-//                var gameId = Guid.NewGuid().ToString();
-//                var session = new GameSession
-//                {
-//                    Player1 = opponentKey,
-//                    Player2 = username,
-//                    Board = new char[3, 3],
-//                    CurrentPlayer = opponentKey,
-//                    SymbolMap = new Dictionary<string, char> { { opponentKey, 'X' }, { username, 'O' } }
-//                };
-//                _games.TryAdd(gameId, session);
-
-//                await Groups.AddToGroupAsync(opponentConnectionId, gameId);
-//                await Groups.AddToGroupAsync(Context.ConnectionId, gameId);
-
-//                _logger.LogInformation("Игра началась: {GameId}, Player1: {Player1}, Player2: {Player2}", gameId, opponentKey, username);
-//                await Clients.Group(gameId).SendAsync("GameStarted", gameId, session.Player1, session.Player2, session.SymbolMap);
-//            }
-//            else
-//            {
-//                _logger.LogInformation("Оппонент не найден. Игрок {Username} добавлен в ожидание.", username);
-//                _waitingPlayers.TryAdd(username, (Context.ConnectionId, username));
-//                await Clients.Caller.SendAsync("WaitingForOpponent");
-//            }
-//        }
-
-//        public async Task MakeMove(string gameId, string username, int row, int col)
-//        {
-//            if (!_games.TryGetValue(gameId, out var session) || session.CurrentPlayer != username)
-//            {
-//                _logger.LogWarning("Невалидный ход: игра не найдена или не твой ход. GameId: {GameId}, Username: {Username}", gameId, username);
-//                return;
-//            }
-
-//            if (session.Board[row, col] != '\0')
-//            {
-//                _logger.LogWarning("Клетка занята: row={Row}, col={Col}", row, col);
-//                return;
-//            }
-
-//            session.Board[row, col] = session.SymbolMap[username];
-//            _logger.LogInformation("Ход сделан: {Username} поставил {Symbol} на row={Row}, col={Col}", username, session.SymbolMap[username], row, col);
-//            await Clients.Group(gameId).SendAsync("MoveMade", username, row, col, session.SymbolMap[username]);
-
-//            // Переключаем игрока
-//            session.CurrentPlayer = session.Player1 == username ? session.Player2 : session.Player1;
-//        }
-//        public async Task SendMessage(string user, string message)
-//        {
-//            await Clients.All.SendAsync("ReceiveMessage", user, message);
-//        }
-//    }
-
-//    public class GameSession
-//    {
-//        public string Player1 { get; set; } = string.Empty;
-//        public string Player2 { get; set; } = string.Empty;
-//        public char[,] Board { get; set; }
-//        public string CurrentPlayer { get; set; } = string.Empty;
-//        public Dictionary<string, char> SymbolMap { get; set; } = new();
-//    }
-//}

@@ -37,7 +37,7 @@ else
         if (string.IsNullOrWhiteSpace(username)) return;
 
         hubConnection = new HubConnectionBuilder()
-            .WithUrl("https://26.171.188.146:5001/gameHub")
+            .WithUrl("https://26.171.188.146:5001/originalHub")
             .WithAutomaticReconnect()
             .Build();
 

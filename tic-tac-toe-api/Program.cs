@@ -69,6 +69,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapHub<GameHub>("/gameHub").RequireCors("AllowClient");
+app.MapHub<TicTacToeOriginalHub>("/originalHub").RequireCors("AllowClient");
 app.UseCors("AllowClient");
 app.UseHttpsRedirection();
 app.UseAuthentication();

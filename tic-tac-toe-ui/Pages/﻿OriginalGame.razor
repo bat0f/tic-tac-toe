@@ -1,8 +1,7 @@
-﻿@page "/game"
+﻿@page "/original"
 @using Microsoft.AspNetCore.SignalR.Client
-@using System.Timers
 
-<h3>Крестики-нолики с задачами</h3>
+<h3>Крестики-нолики</h3>
 
 @if (!connected)
 {
@@ -32,19 +31,7 @@ else if (gameOverMessage != null)
 else
 {
     <p>Вы играете за: @playerSymbol</p>
-    <p>Ход игрока: @currentPlayer (Осталось: @timerSeconds с)</p>
-    @if (!string.IsNullOrEmpty(feedback))
-    {
-        <p id="feedback" style="color: @(feedback.Contains("Правильно") ? "green" : "red");">@feedback</p>
-    }
-    @if (!string.IsNullOrEmpty(task) && selectedRow >= 0 && selectedCol >= 0 && currentPlayer == username)
-    {
-        <div>
-            <p>Задача: @task</p>
-            <input @bind="answer" placeholder="Введите ответ" />
-            <button @onclick="SubmitAnswer">Отправить</button>
-        </div>
-    }
+    <p>Ход игрока: @currentPlayer</p>
     <div style="display: grid; grid-template-columns: repeat(@boardSize, 100px); gap: 5px; width: @(boardSize * 105)px;">
         @for (int i = 0; i < boardSize; i++)
         {
@@ -53,7 +40,7 @@ else
                 var row = i;
                 var col = j;
                 <button style="width: 100px; height: 100px; font-size: 24px;"
-                        disabled="@(currentPlayer != username || board[i][j] != '\0' || gameOverMessage != null || isTaskPhase)"
+                        disabled="@(currentPlayer != username || board[i][j] != '\0' || gameOverMessage != null)"
                         @onclick="() => MakeMove(row, col)">
                     @(board[i][j] == '\0' ? "" : board[i][j].ToString())
                 </button>
@@ -83,14 +70,6 @@ else
     private string? gameOverMessage;
     private string errorMessage = "";
     private int boardSize;
-    private Timer? timer;
-    private int timerSeconds = 8;
-    private string task = "";
-    private string answer = "";
-    private int selectedRow = -1;
-    private int selectedCol = -1;
-    private string feedback = "";
-    private bool isTaskPhase = false;
 
     private async Task Connect()
     {
@@ -100,7 +79,7 @@ else
         }
 
         hubConnection = new HubConnectionBuilder()
-            .WithUrl("https://26.171.188.146:5001/gameHub")
+            .WithUrl("https://26.171.188.146:5001/originalHub")
             .WithAutomaticReconnect()
             .Build();
 
@@ -123,41 +102,25 @@ else
             currentPlayer = p1;
             boardSize = lineLength == 3 ? 6 : lineLength == 4 ? 8 : 10;
             board = CreateEmptyBoard(boardSize);
-            StartTimer();
             gameOverMessage = null;
             errorMessage = "";
             StateHasChanged();
         });
 
-        hubConnection.On<char[][], string, int, string>("UpdateState", (newBoard, newCurrentPlayer, remainingTime, newTask) =>
+        hubConnection.On<char[][], string>("UpdateState", (newBoard, newCurrentPlayer) =>
         {
-            Console.WriteLine($"Received UpdateState: Board={newBoard.Length}, CurrentPlayer={newCurrentPlayer}, Time={remainingTime}, Task={newTask}, Username={username}");
+            Console.WriteLine("Received UpdateState");
             board = newBoard;
             currentPlayer = newCurrentPlayer;
-            timerSeconds = remainingTime;
-            task = newTask;
-            isTaskPhase = !string.IsNullOrEmpty(newTask);
-            if (!isTaskPhase)
-            {
-                selectedRow = -1;
-                selectedCol = -1;
-            }
-            Console.WriteLine($"After UpdateState: CurrentPlayer={currentPlayer}, IsTaskPhase={isTaskPhase}");
-            StartTimer();
             StateHasChanged();
         });
 
         hubConnection.On<string, int, int, char>("MoveMade", (player, row, col, symbol) =>
         {
-            Console.WriteLine($"Received MoveMade: {player}, {row}, {col}, {symbol}, Username={username}");
+            Console.WriteLine($"Received MoveMade: {player}, {row}, {col}, {symbol}");
             if (board.Length > 0 && row >= 0 && row < board.Length && col >= 0 && col < board[row].Length)
             {
                 board[row][col] = symbol;
-                selectedRow = -1;
-                selectedCol = -1;
-                task = "";
-                isTaskPhase = false;
-                Console.WriteLine($"After MoveMade: IsTaskPhase={isTaskPhase}");
                 StateHasChanged();
             }
         });
@@ -165,13 +128,7 @@ else
         hubConnection.On<string, string>("GameOver", (winner, result) =>
         {
             Console.WriteLine($"Received GameOver: {winner}, {result}");
-            StopTimer();
             gameOverMessage = result == "win" ? $"Победил {winner}!" : "Ничья!";
-            task = "";
-            feedback = "";
-            selectedRow = -1;
-            selectedCol = -1;
-            isTaskPhase = false;
             StateHasChanged();
         });
 
@@ -187,21 +144,8 @@ else
                 gameOverMessage = null;
                 errorMessage = "";
                 isWaiting = false;
-                task = "";
-                feedback = "";
-                selectedRow = -1;
-                selectedCol = -1;
-                isTaskPhase = false;
                 StateHasChanged();
             }
-        });
-
-        hubConnection.On<string>("TaskFeedback", (message) =>
-        {
-            Console.WriteLine($"Received TaskFeedback: {message}");
-            feedback = message;
-            StateHasChanged();
-            _ = Task.Delay(2000).ContinueWith(_ => { feedback = ""; StateHasChanged(); });
         });
 
         try
@@ -225,12 +169,10 @@ else
 
     private async Task MakeMove(int row, int col)
     {
-        if (hubConnection == null || gameId == null || isTaskPhase) return;
+        if (hubConnection == null || gameId == null) return;
         try
         {
-            Console.WriteLine($"Making move: {row}, {col}, Username={username}");
-            selectedRow = row;
-            selectedCol = col;
+            Console.WriteLine($"Making move: {row}, {col}");
             await hubConnection.SendAsync("MakeMove", gameId, username, row, col);
             Console.WriteLine("Sent MakeMove request");
         }
@@ -242,68 +184,13 @@ else
         }
     }
 
-    private async Task SubmitAnswer()
-    {
-        if (hubConnection == null || gameId == null || string.IsNullOrEmpty(task) || selectedRow < 0 || selectedCol < 0) return;
-        try
-        {
-            Console.WriteLine($"Submitting answer: {answer}, Username={username}");
-            await hubConnection.SendAsync("SubmitAnswer", gameId, username, answer);
-            answer = "";
-            Console.WriteLine("Sent SubmitAnswer request");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"SubmitAnswer failed: {ex.Message}");
-            errorMessage = $"Ошибка отправки ответа: {ex.Message}";
-            StateHasChanged();
-        }
-    }
-
     private async Task ResetGame()
     {
         if (hubConnection != null && !string.IsNullOrEmpty(username))
         {
             Console.WriteLine("Resetting game...");
-            StopTimer();
-            await Connect();
+            await Connect(); // Переподключение для новой игры
         }
-    }
-
-    private void StartTimer()
-    {
-        StopTimer();
-        timer = new Timer(1000);
-        timer.Elapsed += (s, e) =>
-        {
-            timerSeconds--;
-            if (timerSeconds <= 0)
-            {
-                StopTimer();
-                if (hubConnection != null && gameId != null && currentPlayer == username)
-                {
-                    if (isTaskPhase)
-                    {
-                        _ = Task.Run(async () => await hubConnection.SendAsync("PassTurn", gameId, username));
-                    }
-                    else
-                    {
-                        _ = Task.Run(async () => await hubConnection.SendAsync("PassTurn", gameId, username));
-                    }
-                }
-            }
-            InvokeAsync(StateHasChanged);
-        };
-        timerSeconds = isTaskPhase ? 15 : 8;
-        timer.Start();
-    }
-
-    private void StopTimer()
-    {
-        timer?.Stop();
-        timer?.Dispose();
-        timer = null;
-        InvokeAsync(StateHasChanged);
     }
 
     private char[][] CreateEmptyBoard(int size)
@@ -318,7 +205,6 @@ else
 
     public async ValueTask DisposeAsync()
     {
-        StopTimer();
         if (hubConnection is not null)
         {
             Console.WriteLine("Disposing connection...");
