@@ -1,6 +1,7 @@
 ﻿@page "/game"
 @using Microsoft.AspNetCore.SignalR.Client
 @using System.Timers
+@using System.Globalization
 
 <h3>Крестики-нолики с задачами</h3>
 
@@ -27,12 +28,43 @@ else if (isWaiting)
 else if (gameOverMessage != null)
 {
     <p>@gameOverMessage</p>
-    <button @onclick="ResetGame">Новая игра</button>
+    <div style="position: relative; width: @(boardSize * 105)px; height: @(boardSize * 105)px;">
+        <div style="display: grid; grid-template-columns: repeat(@boardSize, 100px); gap: 5px; width: @(boardSize * 105)px;">
+            @for (int i = 0; i < boardSize; i++)
+            {
+                for (int j = 0; j < boardSize; j++)
+                {
+                    var row = i;
+                    var col = j;
+                    <button style="width: 100px; height: 100px; font-size: 24px;" disabled="true">
+                        @(board[i][j] == '\0' ? "" : board[i][j].ToString())
+                    </button>
+                }
+            }
+        </div>
+        @if (winLineType != null && (startX != endX || startY != endY))
+        {
+            <svg style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;">
+                <line x1="@((startY * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
+                      y1="@((startX * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
+                      x2="@((endY * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
+                      y2="@((endX * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
+                      stroke="red" stroke-width="5" stroke-linecap="round" />
+            </svg>
+        }
+        else
+        {
+            <p>Отладка: winLineType=@winLineType, startX=@startX, startY=@startY, endX=@endX, endY=@endY</p>
+        }
+    </div>
+    <button @onclick="ResetGame">Реванш</button>
+    <button @onclick="ReturnToMainMenu">Вернуться в главное меню</button>
 }
 else
 {
     <p>Вы играете за: @playerSymbol</p>
     <p>Ход игрока: @currentPlayer (Осталось: @timerSeconds с)</p>
+    <p>Осталось до конца сессии: @((sessionTimerSeconds / 60)) мин @((sessionTimerSeconds % 60)) с</p>
     @if (!string.IsNullOrEmpty(feedback))
     {
         <p id="feedback" style="color: @(feedback.Contains("Правильно") ? "green" : "red");">@feedback</p>
@@ -53,7 +85,7 @@ else
                 var row = i;
                 var col = j;
                 <button style="width: 100px; height: 100px; font-size: 24px;"
-                        disabled="@(currentPlayer != username || board[i][j] != '\0' || gameOverMessage != null || isTaskPhase)"
+                        disabled="@(currentPlayer != username || board[i][j] != '\0' || gameOverMessage != null || (!string.IsNullOrEmpty(task) && (selectedRow >= 0 || selectedCol >= 0)))"
                         @onclick="() => MakeMove(row, col)">
                     @(board[i][j] == '\0' ? "" : board[i][j].ToString())
                 </button>
@@ -85,12 +117,16 @@ else
     private int boardSize;
     private Timer? timer;
     private int timerSeconds = 8;
+    private Timer? sessionTimer;
+    private int sessionTimerSeconds = 15 * 60;
     private string task = "";
     private string answer = "";
     private int selectedRow = -1;
     private int selectedCol = -1;
     private string feedback = "";
     private bool isTaskPhase = false;
+    private string? winLineType;
+    private int startX, startY, endX, endY;
 
     private async Task Connect()
     {
@@ -124,7 +160,9 @@ else
             boardSize = lineLength == 3 ? 6 : lineLength == 4 ? 8 : 10;
             board = CreateEmptyBoard(boardSize);
             StartTimer();
+            StartSessionTimer();
             gameOverMessage = null;
+            winLineType = null;
             errorMessage = "";
             StateHasChanged();
         });
@@ -142,7 +180,7 @@ else
                 selectedRow = -1;
                 selectedCol = -1;
             }
-            Console.WriteLine($"After UpdateState: CurrentPlayer={currentPlayer}, IsTaskPhase={isTaskPhase}");
+            Console.WriteLine($"After UpdateState: CurrentPlayer={currentPlayer}, IsTaskPhase={isTaskPhase}, SelectedRow={selectedRow}, SelectedCol={selectedCol}");
             StartTimer();
             StateHasChanged();
         });
@@ -157,16 +195,31 @@ else
                 selectedCol = -1;
                 task = "";
                 isTaskPhase = false;
-                Console.WriteLine($"After MoveMade: IsTaskPhase={isTaskPhase}");
+                Console.WriteLine($"After MoveMade: IsTaskPhase={isTaskPhase}, SelectedRow={selectedRow}, SelectedCol={selectedCol}");
                 StateHasChanged();
             }
         });
 
-        hubConnection.On<string, string>("GameOver", (winner, result) =>
+        hubConnection.On<string, string, string, int, int, int, int>("GameOver", (winner, result, lineType, sX, sY, eX, eY) =>
         {
-            Console.WriteLine($"Received GameOver: {winner}, {result}");
+            Console.WriteLine($"Received GameOver: winner={winner}, result={result}, lineType={lineType}, start=({sX},{sY}), end=({eX},{eY})");
             StopTimer();
+            StopSessionTimer();
             gameOverMessage = result == "win" ? $"Победил {winner}!" : "Ничья!";
+            if (result == "win" && lineType != null && (sX != eX || sY != eY))
+            {
+                winLineType = lineType;
+                startX = sX;
+                startY = sY;
+                endX = eX;
+                endY = eY;
+                Console.WriteLine($"Линия установлена: {winLineType}, от ({startX},{startY}) до ({endX},{endY})");
+            }
+            else
+            {
+                winLineType = null;
+                Console.WriteLine("Линия не установлена: либо ничья, либо некорректные координаты.");
+            }
             task = "";
             feedback = "";
             selectedRow = -1;
@@ -175,23 +228,24 @@ else
             StateHasChanged();
         });
 
-        hubConnection.On<string>("GameReset", (id) =>
+        hubConnection.On<string, char[][], string>("GameReset", (id, newBoard, newCurrentPlayer) =>
         {
             Console.WriteLine($"Received GameReset: {id}");
             if (gameId == id)
             {
-                gameId = null;
-                playerSymbol = null;
-                currentPlayer = null;
-                board = new char[0][];
+                board = newBoard;
+                currentPlayer = newCurrentPlayer;
                 gameOverMessage = null;
+                winLineType = null;
                 errorMessage = "";
-                isWaiting = false;
                 task = "";
                 feedback = "";
                 selectedRow = -1;
                 selectedCol = -1;
                 isTaskPhase = false;
+                sessionTimerSeconds = 15 * 60; // Сбрасываем локальный таймер
+                StartSessionTimer();
+                StartTimer();
                 StateHasChanged();
             }
         });
@@ -225,10 +279,10 @@ else
 
     private async Task MakeMove(int row, int col)
     {
-        if (hubConnection == null || gameId == null || isTaskPhase) return;
+        if (hubConnection == null || gameId == null || (currentPlayer != username && !string.IsNullOrEmpty(task))) return;
         try
         {
-            Console.WriteLine($"Making move: {row}, {col}, Username={username}");
+            Console.WriteLine($"Making move: {row}, {col}, Username={username}, CurrentPlayer={currentPlayer}, Task={task}");
             selectedRow = row;
             selectedCol = col;
             await hubConnection.SendAsync("MakeMove", gameId, username, row, col);
@@ -262,11 +316,79 @@ else
 
     private async Task ResetGame()
     {
-        if (hubConnection != null && !string.IsNullOrEmpty(username))
+        if (hubConnection == null) return;
+
+        Console.WriteLine("ResetGame called: Starting reset process...");
+        try
         {
-            Console.WriteLine("Resetting game...");
+            // Сохраняем параметры текущей игры
+            var currentUsername = username;
+            var currentDifficulty = difficulty;
+            var currentLineLength = lineLength;
+
+            // Останавливаем текущие таймеры и очищаем состояние
             StopTimer();
+            StopSessionTimer();
+            gameOverMessage = null;
+            winLineType = null;
+            errorMessage = "";
+            task = "";
+            feedback = "";
+            selectedRow = -1;
+            selectedCol = -1;
+            isTaskPhase = false;
+            board = new char[0][];
+            sessionTimerSeconds = 15 * 60;
+
+            // Переподключаемся, как при новой игре
+            await hubConnection.StopAsync();
+            hubConnection = null;
+            connected = false;
+            isWaiting = false;
+
+            // Восстанавливаем параметры и подключаемся заново
+            username = currentUsername;
+            difficulty = currentDifficulty;
+            lineLength = currentLineLength;
             await Connect();
+
+            Console.WriteLine("ResetGame completed: Game restarted.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"ResetGame failed: {ex.Message}");
+            errorMessage = $"Ошибка при реванше: {ex.Message}";
+            StateHasChanged();
+        }
+    }
+
+    private async Task ReturnToMainMenu()
+    {
+        if (hubConnection != null)
+        {
+            Console.WriteLine("Returning to main menu...");
+            StopTimer();
+            StopSessionTimer();
+            await hubConnection.StopAsync();
+            hubConnection = null;
+            connected = false;
+            isWaiting = false;
+            gameId = null;
+            playerSymbol = null;
+            currentPlayer = null;
+            player1 = null;
+            player2 = null;
+            board = new char[0][];
+            gameOverMessage = null;
+            winLineType = null;
+            errorMessage = "";
+            task = "";
+            feedback = "";
+            selectedRow = -1;
+            selectedCol = -1;
+            isTaskPhase = false;
+            sessionTimerSeconds = 15 * 60;
+            StateHasChanged();
         }
     }
 
@@ -306,6 +428,34 @@ else
         InvokeAsync(StateHasChanged);
     }
 
+    private void StartSessionTimer()
+    {
+        StopSessionTimer();
+        sessionTimer = new Timer(1000);
+        sessionTimer.Elapsed += (s, e) =>
+        {
+            sessionTimerSeconds--;
+            if (sessionTimerSeconds <= 0)
+            {
+                StopSessionTimer();
+                if (hubConnection != null && gameId != null)
+                {
+                    _ = Task.Run(async () => await hubConnection.SendAsync("PassTurn", gameId, username));
+                }
+            }
+            InvokeAsync(StateHasChanged);
+        };
+        sessionTimer.Start();
+    }
+
+    private void StopSessionTimer()
+    {
+        sessionTimer?.Stop();
+        sessionTimer?.Dispose();
+        sessionTimer = null;
+        InvokeAsync(StateHasChanged);
+    }
+
     private char[][] CreateEmptyBoard(int size)
     {
         var newBoard = new char[size][];
@@ -319,6 +469,7 @@ else
     public async ValueTask DisposeAsync()
     {
         StopTimer();
+        StopSessionTimer();
         if (hubConnection is not null)
         {
             Console.WriteLine("Disposing connection...");
