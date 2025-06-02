@@ -5,6 +5,7 @@ using System.Text;
 using tic_tac_toe_api.Data;
 using tic_tac_toe_api.Hubs;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.OpenApi.Models;
 using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,7 +17,7 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
         options.UseHttps("server.pfx", "ZD0dCR8jvG5dBp1kJ0TJX8cK4O0aCuEKGPNTQ3MsvdpdB4t0ffBbgmECShTmwYYsz");
     });
 });
-//UseHttps(new X509Certificate2("server.pfx", "ZD0dCR8jvG5dBp1kJ0TJX8cK4O0aCuEKGPNTQ3MsvdpdB4t0ffBbgmECShTmwYYsz"));
+
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite("Data Source=game.db"));
 
@@ -29,18 +30,62 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = "TicTacToe",
-            ValidAudience = "TicTacToe",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("ZD0dCR8jvG5dBp1kJ0TJX8cK4O0aCuEKGPNTQ3MsvpdB4t0ffBbgmECShTmwYYsz"))
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
+        };
+        // Настройка для SignalR
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+                if (string.IsNullOrEmpty(accessToken))
+                {
+                    accessToken = context.Request.Query["access_token"];
+                }
+                if (!string.IsNullOrEmpty(accessToken))
+                {
+                    context.Token = accessToken;
+                }
+                return Task.CompletedTask;
+            }
         };
     });
 
+builder.Services.AddAuthorization();
 builder.Services.AddSignalR();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
 
-// Добавляем логирование
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Tic-Tac-Toe API", Version = "v1" });
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        In = ParameterLocation.Header,
+        Description = "Введите JWT токен в формате 'Bearer {token}'",
+        Name = "Authorization",
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT"
+    });
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+
 builder.Services.AddLogging(logging =>
 {
     logging.AddConsole();
@@ -51,31 +96,24 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowClient", policy =>
     {
-        policy.WithOrigins("https://26.171.188.146:7056") // Указываем строго клиент
+        policy.WithOrigins("https://26.171.188.146:7056")
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // Важно для SignalR
+              .AllowCredentials();
     });
 });
 
-
-
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+app.UseSwagger();
+app.UseSwaggerUI();
 
-app.MapHub<GameHub>("/gameHub").RequireCors("AllowClient");
-app.MapHub<TicTacToeOriginalHub>("/originalHub").RequireCors("AllowClient");
 app.UseCors("AllowClient");
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-
-
+app.MapHub<GameHub>("/gameHub").RequireCors("AllowClient");
+app.MapHub<TicTacToeOriginalHub>("/originalHub").RequireCors("AllowClient");
 
 app.Run();
