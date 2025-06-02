@@ -1,0 +1,63 @@
+﻿@page "/register"
+@inject HttpClient Http
+@inject NavigationManager Navigation
+
+<h3>Регистрация</h3>
+
+<div>
+    <label>Имя пользователя:</label>
+    <input @bind="model.Username" placeholder="Введите имя" />
+</div>
+<div>
+    <label>Email:</label>
+    <input @bind="model.Email" placeholder="Введите email" type="email" />
+</div>
+<div>
+    <label>Пароль:</label>
+    <input @bind="model.Password" placeholder="Введите пароль" type="password" />
+</div>
+<button @onclick="RegisterUser">Зарегистрироваться</button>
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <p style="color: red;">@errorMessage</p>
+}
+
+@code {
+    private RegisterRequest model = new RegisterRequest();
+    private string errorMessage = "";
+
+    private class RegisterRequest
+    {
+        public string Username { get; set; }
+        public string? Email { get; set; }
+        public string Password { get; set; }
+    }
+
+    private async Task RegisterUser()
+    {
+        try
+        {
+            var response = await Http.PostAsJsonAsync("api/auth/register", model);
+            if (response.IsSuccessStatusCode)
+            {
+                errorMessage = "";
+                Navigation.NavigateTo("/login");
+            }
+            else
+            {
+                var errorResponse = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+                errorMessage = errorResponse?.Message ?? "Ошибка регистрации.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка: {ex.Message}";
+        }
+    }
+
+    private class ErrorResponse
+    {
+        public string Message { get; set; }
+    }
+}

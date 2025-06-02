@@ -2,9 +2,11 @@
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System;
+using Microsoft.AspNetCore.Authorization;
 
 namespace tic_tac_toe_api.Hubs
 {
+    [Authorize]
     public class GameHub : Hub
     {
         private static readonly List<(string ConnectionId, string Username, string Difficulty, int LineLength)> waitingPlayers = new();

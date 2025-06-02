@@ -1,8 +1,10 @@
-﻿using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
 using System.Text.RegularExpressions;
 
 namespace tic_tac_toe_api.Hubs
 {
+    [Authorize]
     public class TicTacToeOriginalHub : Hub
     {
         private static readonly List<(string ConnectionId, string Username, string Difficulty, int LineLength)> waitingPlayers = new();

@@ -2,33 +2,98 @@
 @using Microsoft.AspNetCore.SignalR.Client
 @using System.Timers
 @using System.Globalization
+@using System.Net.Http.Json
+@using tic_tac_toe_ui.Models
+@inject IJSRuntime JSRuntime
+@inject HttpClient Http
+@inject NavigationManager Navigation
 
 <h3>Крестики-нолики с задачами</h3>
 
-@if (!connected)
+@if (!isAuthenticated)
 {
-    <p>Введите имя:</p>
-    <input @bind="username" placeholder="Введите имя" />
-    <select @bind="difficulty">
-        <option value="easy">Лёгкий</option>
-        <option value="medium">Средний</option>
-        <option value="hard">Сложный</option>
-    </select>
-    <select @bind="lineLength">
-        <option value="3">3x3</option>
-        <option value="4">4x4</option>
-        <option value="5">5x5</option>
-    </select>
-    <button @onclick="Connect">Присоединиться</button>
+    <p>Вы не авторизованы. Пожалуйста, <a href="/login">войдите</a> или <a href="/register">зарегистрируйтесь</a>.</p>
 }
-else if (isWaiting)
+else
 {
-    <p>Ожидание второго игрока...</p>
-}
-else if (gameOverMessage != null)
-{
-    <p>@gameOverMessage</p>
-    <div style="position: relative; width: @(boardSize * 105)px; height: @(boardSize * 105)px;">
+    <p>Вы вошли как: @currentUsername</p>
+    <button @onclick="Logout">Выйти</button>
+
+    @if (!connected)
+    {
+        <p>Выберите параметры игры:</p>
+        <select @bind="difficulty">
+            <option value="easy">Лёгкий</option>
+            <option value="medium">Средний</option>
+            <option value="hard">Сложный</option>
+        </select>
+        <select @bind="lineLength">
+            <option value="3">3x3</option>
+            <option value="4">4x4</option>
+            <option value="5">5x5</option>
+        </select>
+        <button @onclick="Connect" disabled="@isConnecting">Присоединиться</button>
+        @if (isConnecting)
+        {
+            <p>Подключение...</p>
+        }
+    }
+    else if (isWaiting)
+    {
+        <p>Ожидание второго игрока...</p>
+    }
+    else if (gameOverMessage != null)
+    {
+        <p>@gameOverMessage</p>
+        <div style="position: relative; width: @(boardSize * 105)px; height: @(boardSize * 105)px;">
+            <div style="display: grid; grid-template-columns: repeat(@boardSize, 100px); gap: 5px; width: @(boardSize * 105)px;">
+                @for (int i = 0; i < boardSize; i++)
+                {
+                    for (int j = 0; j < boardSize; j++)
+                    {
+                        var row = i;
+                        var col = j;
+                        <button style="width: 100px; height: 100px; font-size: 24px;" disabled="true">
+                            @(board[i][j] == '\0' ? "" : board[i][j].ToString())
+                        </button>
+                    }
+                }
+            </div>
+            @if (winLineType != null && (startX != endX || startY != endY))
+            {
+                <svg style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;">
+                    <line x1="@((startY * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
+                          y1="@((startX * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
+                          x2="@((endY * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
+                          y2="@((endX * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
+                          stroke="red" stroke-width="5" stroke-linecap="round" />
+                </svg>
+            }
+            else
+            {
+                <p>Отладка: winLineType=@winLineType, startX=@startX, startY=@startY, endX=@endX, endY=@endY</p>
+            }
+        </div>
+        <button @onclick="ResetGame">Реванш</button>
+        <button @onclick="ReturnToMainMenu">Вернуться в главное меню</button>
+    }
+    else
+    {
+        <p>Вы играете за: @playerSymbol</p>
+        <p>Ход игрока: @currentPlayer (Осталось: @timerSeconds с)</p>
+        <p>Осталось до конца сессии: @((sessionTimerSeconds / 60)) мин @((sessionTimerSeconds % 60)) с</p>
+        @if (!string.IsNullOrEmpty(feedback))
+        {
+            <p id="feedback" style="color: @(feedback.Contains("Правильно") ? "green" : "red");">@feedback</p>
+        }
+        @if (!string.IsNullOrEmpty(task) && selectedRow >= 0 && selectedCol >= 0 && currentPlayer == currentUsername)
+        {
+            <div>
+                <p>Задача: @task</p>
+                <input @bind="answer" placeholder="Введите ответ" />
+                <button @onclick="SubmitAnswer">Отправить</button>
+            </div>
+        }
         <div style="display: grid; grid-template-columns: repeat(@boardSize, 100px); gap: 5px; width: @(boardSize * 105)px;">
             @for (int i = 0; i < boardSize; i++)
             {
@@ -36,76 +101,34 @@ else if (gameOverMessage != null)
                 {
                     var row = i;
                     var col = j;
-                    <button style="width: 100px; height: 100px; font-size: 24px;" disabled="true">
+                    <button style="width: 100px; height: 100px; font-size: 24px;"
+                            disabled="@(currentPlayer != currentUsername || board[i][j] != '\0' || gameOverMessage != null || (!string.IsNullOrEmpty(task) && (selectedRow >= 0 || selectedCol >= 0)))"
+                            @onclick="() => MakeMove(row, col)">
                         @(board[i][j] == '\0' ? "" : board[i][j].ToString())
                     </button>
                 }
             }
         </div>
-        @if (winLineType != null && (startX != endX || startY != endY))
-        {
-            <svg style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;">
-                <line x1="@((startY * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
-                      y1="@((startX * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
-                      x2="@((endY * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
-                      y2="@((endX * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
-                      stroke="red" stroke-width="5" stroke-linecap="round" />
-            </svg>
-        }
-        else
-        {
-            <p>Отладка: winLineType=@winLineType, startX=@startX, startY=@startY, endX=@endX, endY=@endY</p>
-        }
-    </div>
-    <button @onclick="ResetGame">Реванш</button>
-    <button @onclick="ReturnToMainMenu">Вернуться в главное меню</button>
-}
-else
-{
-    <p>Вы играете за: @playerSymbol</p>
-    <p>Ход игрока: @currentPlayer (Осталось: @timerSeconds с)</p>
-    <p>Осталось до конца сессии: @((sessionTimerSeconds / 60)) мин @((sessionTimerSeconds % 60)) с</p>
-    @if (!string.IsNullOrEmpty(feedback))
-    {
-        <p id="feedback" style="color: @(feedback.Contains("Правильно") ? "green" : "red");">@feedback</p>
     }
-    @if (!string.IsNullOrEmpty(task) && selectedRow >= 0 && selectedCol >= 0 && currentPlayer == username)
-    {
-        <div>
-            <p>Задача: @task</p>
-            <input @bind="answer" placeholder="Введите ответ" />
-            <button @onclick="SubmitAnswer">Отправить</button>
-        </div>
-    }
-    <div style="display: grid; grid-template-columns: repeat(@boardSize, 100px); gap: 5px; width: @(boardSize * 105)px;">
-        @for (int i = 0; i < boardSize; i++)
-        {
-            for (int j = 0; j < boardSize; j++)
-            {
-                var row = i;
-                var col = j;
-                <button style="width: 100px; height: 100px; font-size: 24px;"
-                        disabled="@(currentPlayer != username || board[i][j] != '\0' || gameOverMessage != null || (!string.IsNullOrEmpty(task) && (selectedRow >= 0 || selectedCol >= 0)))"
-                        @onclick="() => MakeMove(row, col)">
-                    @(board[i][j] == '\0' ? "" : board[i][j].ToString())
-                </button>
-            }
-        }
-    </div>
-}
 
-@if (!string.IsNullOrEmpty(errorMessage))
-{
-    <p style="color: red;">@errorMessage</p>
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <p style="color: red;">@errorMessage</p>
+    }
 }
 
 @code {
     private HubConnection? hubConnection;
-    private string username = "";
+    private string currentUsername = "";
+    private int currentUserId;
+    private string accessToken = "";
+    private string refreshToken = "";
+    private bool isAuthenticated = false;
     private string difficulty = "easy";
     private int lineLength = 3;
     private bool connected = false;
     private bool isWaiting = false;
+    private bool isConnecting = false; // Добавляем флаг для предотвращения повторного нажатия
     private string? playerSymbol;
     private string? currentPlayer;
     private string? gameId;
@@ -127,171 +150,522 @@ else
     private bool isTaskPhase = false;
     private string? winLineType;
     private int startX, startY, endX, endY;
+    private int maxRetryAttempts = 3;
+    private int retryCount = 0;
 
-    private async Task Connect()
+    protected override async Task OnInitializedAsync()
     {
-        if (string.IsNullOrWhiteSpace(username))
+        await CheckAuth();
+    }
+
+    private async Task CheckAuth()
+    {
+        accessToken = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "accessToken") ?? "";
+        refreshToken = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "refreshToken") ?? "";
+        Console.WriteLine($"CheckAuth: AccessToken={accessToken}, RefreshToken={refreshToken}");
+
+        if (string.IsNullOrEmpty(accessToken))
         {
-            username = $"Player_{Guid.NewGuid().ToString().Substring(0, 4)}";
+            Console.WriteLine("CheckAuth: No access token found, redirecting to login");
+            isAuthenticated = false;
+            Navigation.NavigateTo("/login");
+            return;
         }
 
-        hubConnection = new HubConnectionBuilder()
-            .WithUrl("https://26.171.188.146:5001/gameHub")
-            .WithAutomaticReconnect()
-            .Build();
-
-        hubConnection.On("WaitingForOpponent", () =>
+        try
         {
-            Console.WriteLine("Received WaitingForOpponent");
-            isWaiting = true;
-            errorMessage = "";
-            StateHasChanged();
-        });
-
-        hubConnection.On<string, string, string, Dictionary<string, char>>("GameStarted", (id, p1, p2, symbolMap) =>
-        {
-            Console.WriteLine($"Received GameStarted: {id}, {p1}, {p2}");
-            isWaiting = false;
-            gameId = id;
-            player1 = p1;
-            player2 = p2;
-            playerSymbol = symbolMap[username].ToString();
-            currentPlayer = p1;
-            boardSize = lineLength == 3 ? 6 : lineLength == 4 ? 8 : 10;
-            board = CreateEmptyBoard(boardSize);
-            StartTimer();
-            StartSessionTimer();
-            gameOverMessage = null;
-            winLineType = null;
-            errorMessage = "";
-            StateHasChanged();
-        });
-
-        hubConnection.On<char[][], string, int, string>("UpdateState", (newBoard, newCurrentPlayer, remainingTime, newTask) =>
-        {
-            Console.WriteLine($"Received UpdateState: Board={newBoard.Length}, CurrentPlayer={newCurrentPlayer}, Time={remainingTime}, Task={newTask}, Username={username}");
-            board = newBoard;
-            currentPlayer = newCurrentPlayer;
-            timerSeconds = remainingTime;
-            task = newTask;
-            isTaskPhase = !string.IsNullOrEmpty(newTask);
-            if (!isTaskPhase)
+            var response = await Http.PostAsJsonAsync("api/auth/validate", accessToken);
+            Console.WriteLine($"CheckAuth: Validate response status={response.StatusCode}");
+            if (response.IsSuccessStatusCode)
             {
-                selectedRow = -1;
-                selectedCol = -1;
+                var result = await response.Content.ReadFromJsonAsync<ValidateTokenResponse>();
+                currentUserId = result.UserId;
+                currentUsername = result.Username;
+                isAuthenticated = true;
+                Console.WriteLine($"CheckAuth: Successfully validated, Username={currentUsername}");
             }
-            Console.WriteLine($"After UpdateState: CurrentPlayer={currentPlayer}, IsTaskPhase={isTaskPhase}, SelectedRow={selectedRow}, SelectedCol={selectedCol}");
-            StartTimer();
-            StateHasChanged();
-        });
-
-        hubConnection.On<string, int, int, char>("MoveMade", (player, row, col, symbol) =>
-        {
-            Console.WriteLine($"Received MoveMade: {player}, {row}, {col}, {symbol}, Username={username}");
-            if (board.Length > 0 && row >= 0 && row < board.Length && col >= 0 && col < board[row].Length)
+            else if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError)
             {
-                board[row][col] = symbol;
-                selectedRow = -1;
-                selectedCol = -1;
-                task = "";
-                isTaskPhase = false;
-                Console.WriteLine($"After MoveMade: IsTaskPhase={isTaskPhase}, SelectedRow={selectedRow}, SelectedCol={selectedCol}");
-                StateHasChanged();
-            }
-        });
-
-        hubConnection.On<string, string, string, int, int, int, int>("GameOver", (winner, result, lineType, sX, sY, eX, eY) =>
-        {
-            Console.WriteLine($"Received GameOver: winner={winner}, result={result}, lineType={lineType}, start=({sX},{sY}), end=({eX},{eY})");
-            StopTimer();
-            StopSessionTimer();
-            gameOverMessage = result == "win" ? $"Победил {winner}!" : "Ничья!";
-            if (result == "win" && lineType != null && (sX != eX || sY != eY))
-            {
-                winLineType = lineType;
-                startX = sX;
-                startY = sY;
-                endX = eX;
-                endY = eY;
-                Console.WriteLine($"Линия установлена: {winLineType}, от ({startX},{startY}) до ({endX},{endY})");
+                errorMessage = "Ошибка на сервере при валидации токена. Проверьте API-сервер.";
+                Console.WriteLine("CheckAuth: Server error during validation (500)");
+                isAuthenticated = false;
+                await Logout();
+                return;
             }
             else
             {
-                winLineType = null;
-                Console.WriteLine("Линия не установлена: либо ничья, либо некорректные координаты.");
+                Console.WriteLine("CheckAuth: Token validation failed, attempting to refresh");
+                await RefreshToken();
             }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка подключения к серверу: {ex.Message}. Проверьте, запущен ли API-сервер.";
+            Console.WriteLine($"CheckAuth: Failed to validate token: {ex.Message}");
+            isAuthenticated = false;
+            await Logout();
+            return;
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task RefreshToken()
+    {
+        if (string.IsNullOrEmpty(refreshToken))
+        {
+            Console.WriteLine("RefreshToken: No refresh token available, logging out");
+            await Logout();
+            return;
+        }
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("api/auth/refresh", new RefreshTokenRequest
+                {
+                    AccessToken = accessToken,
+                    RefreshToken = refreshToken
+                });
+
+            Console.WriteLine($"RefreshToken: Refresh response status={response.StatusCode}");
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<RefreshTokenResponse>();
+                accessToken = result.AccessToken;
+                refreshToken = result.RefreshToken;
+                await JSRuntime.InvokeVoidAsync("localStorage.setItem", "accessToken", accessToken);
+                await JSRuntime.InvokeVoidAsync("localStorage.setItem", "refreshToken", refreshToken);
+                Console.WriteLine($"RefreshToken: Successfully refreshed tokens, AccessToken={accessToken}");
+
+                var validateResponse = await Http.PostAsJsonAsync("api/auth/validate", accessToken);
+                Console.WriteLine($"RefreshToken: Validate after refresh status={validateResponse.StatusCode}");
+                if (validateResponse.IsSuccessStatusCode)
+                {
+                    var validateResult = await validateResponse.Content.ReadFromJsonAsync<ValidateTokenResponse>();
+                    currentUserId = validateResult.UserId;
+                    currentUsername = validateResult.Username;
+                    isAuthenticated = true;
+                    Console.WriteLine($"RefreshToken: Successfully validated after refresh, Username={currentUsername}");
+                    retryCount = 0;
+                }
+                else if (validateResponse.StatusCode == System.Net.HttpStatusCode.InternalServerError)
+                {
+                    errorMessage = "Ошибка на сервере при валидации нового токена. Проверьте API-сервер.";
+                    Console.WriteLine("RefreshToken: Server error during validation after refresh (500)");
+                    await Logout();
+                    return;
+                }
+                else
+                {
+                    Console.WriteLine("RefreshToken: Validation after refresh failed, logging out");
+                    await Logout();
+                    return;
+                }
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError)
+            {
+                errorMessage = "Ошибка на сервере при обновлении токена. Проверьте API-сервер.";
+                Console.WriteLine("RefreshToken: Server error during refresh (500)");
+                await Logout();
+                return;
+            }
+            else
+            {
+                Console.WriteLine("RefreshToken: Refresh failed, logging out");
+                await Logout();
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Не удалось обновить токен: {ex.Message}. Проверьте, запущен ли сервер.";
+            Console.WriteLine($"RefreshToken: Failed: {ex.Message}");
+            await Logout();
+            return;
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task Logout()
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(accessToken))
+            {
+                var response = await Http.PostAsync("api/auth/logout", null);
+                Console.WriteLine($"Logout: Logout response status={response.StatusCode}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Logout: Failed: {ex.Message}");
+            errorMessage = $"Не удалось выйти из системы: {ex.Message}. Проверьте, запущен ли сервер.";
+        }
+        finally
+        {
+            accessToken = "";
+            refreshToken = "";
+            currentUsername = "";
+            currentUserId = 0;
+            isAuthenticated = false;
+            await JSRuntime.InvokeVoidAsync("localStorage.removeItem", "accessToken");
+            await JSRuntime.InvokeVoidAsync("localStorage.removeItem", "refreshToken");
+
+            if (hubConnection != null)
+            {
+                StopTimer();
+                StopSessionTimer();
+                await hubConnection.StopAsync();
+                hubConnection = null;
+            }
+            connected = false;
+            isWaiting = false;
+            isConnecting = false;
+            gameId = null;
+            playerSymbol = null;
+            currentPlayer = null;
+            player1 = null;
+            player2 = null;
+            board = new char[0][];
+            gameOverMessage = null;
+            winLineType = null;
+            errorMessage = "";
             task = "";
             feedback = "";
             selectedRow = -1;
             selectedCol = -1;
             isTaskPhase = false;
+            sessionTimerSeconds = 15 * 60;
+            retryCount = 0;
+            Navigation.NavigateTo("/login");
+            Console.WriteLine("Logout: Logged out, redirecting to login");
             StateHasChanged();
-        });
+        }
+    }
 
-        hubConnection.On<string, char[][], string>("GameReset", (id, newBoard, newCurrentPlayer) =>
+    private async Task Connect()
+    {
+        if (isConnecting)
         {
-            Console.WriteLine($"Received GameReset: {id}");
-            if (gameId == id)
+            Console.WriteLine("Connect: Already connecting, ignoring additional click");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(currentUsername))
+        {
+            errorMessage = "Необходимо войти в систему";
+            Navigation.NavigateTo("/login");
+            Console.WriteLine("Connect: No username, redirecting to login");
+            return;
+        }
+
+        isConnecting = true;
+        StateHasChanged();
+
+        try
+        {
+            var validateResponse = await Http.PostAsJsonAsync("api/auth/validate", accessToken);
+            Console.WriteLine($"Connect: Pre-connection validate response status={validateResponse.StatusCode}");
+            if (!validateResponse.IsSuccessStatusCode)
             {
-                board = newBoard;
-                currentPlayer = newCurrentPlayer;
+                if (validateResponse.StatusCode == System.Net.HttpStatusCode.InternalServerError)
+                {
+                    errorMessage = "Ошибка на сервере при валидации токена перед подключением. Проверьте API-сервер.";
+                    Console.WriteLine("Connect: Server error during validation (500)");
+                    await Logout();
+                    return;
+                }
+                Console.WriteLine("Connect: Token invalid before connection, attempting to refresh");
+                await RefreshToken();
+                if (!isAuthenticated)
+                {
+                    Console.WriteLine("Connect: Refresh failed, user not authenticated, redirecting to login");
+                    return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка подключения к серверу: {ex.Message}. Проверьте, запущен ли API-сервер.";
+            Console.WriteLine($"Connect: Failed to validate token: {ex.Message}");
+            await Logout();
+            return;
+        }
+
+        try
+        {
+            if (hubConnection != null)
+            {
+                await hubConnection.StopAsync();
+                hubConnection = null;
+            }
+
+            hubConnection = new HubConnectionBuilder()
+                .WithUrl("https://26.171.188.146:5001/gameHub", options =>
+                {
+                    options.Headers["Authorization"] = $"Bearer {accessToken}";
+                })
+                .WithAutomaticReconnect()
+                .Build();
+
+            hubConnection.On("WaitingForOpponent", () =>
+            {
+                Console.WriteLine("Received WaitingForOpponent");
+                isWaiting = true;
+                errorMessage = "";
+                StateHasChanged();
+            });
+
+            hubConnection.On<string, string, string, Dictionary<string, char>>("GameStarted", (id, p1, p2, symbolMap) =>
+            {
+                Console.WriteLine($"Received GameStarted: {id}, {p1}, {p2}");
+                isWaiting = false;
+                gameId = id;
+                player1 = p1;
+                player2 = p2;
+                playerSymbol = symbolMap[currentUsername].ToString();
+                currentPlayer = p1;
+                boardSize = lineLength == 3 ? 6 : lineLength == 4 ? 8 : 10;
+                board = CreateEmptyBoard(boardSize);
+                StartTimer();
+                StartSessionTimer();
                 gameOverMessage = null;
                 winLineType = null;
                 errorMessage = "";
+                retryCount = 0;
+                StateHasChanged();
+            });
+
+            hubConnection.On<char[][], string, int, string>("UpdateState", (newBoard, newCurrentPlayer, remainingTime, newTask) =>
+            {
+                Console.WriteLine($"Received UpdateState: Board={newBoard.Length}, CurrentPlayer={newCurrentPlayer}, Time={remainingTime}, Task={newTask}, Username={currentUsername}");
+                board = newBoard;
+                currentPlayer = newCurrentPlayer;
+                timerSeconds = remainingTime;
+                task = newTask;
+                isTaskPhase = !string.IsNullOrEmpty(newTask);
+                if (!isTaskPhase)
+                {
+                    selectedRow = -1;
+                    selectedCol = -1;
+                }
+                Console.WriteLine($"After UpdateState: CurrentPlayer={currentPlayer}, IsTaskPhase={isTaskPhase}, SelectedRow={selectedRow}, SelectedCol={selectedCol}");
+                StartTimer();
+                StateHasChanged();
+            });
+
+            hubConnection.On<string, int, int, char>("MoveMade", (player, row, col, symbol) =>
+            {
+                Console.WriteLine($"Received MoveMade: {player}, {row}, {col}, {symbol}, Username={currentUsername}");
+                if (board.Length > 0 && row >= 0 && row < board.Length && col >= 0 && col < board[row].Length)
+                {
+                    board[row][col] = symbol;
+                    selectedRow = -1;
+                    selectedCol = -1;
+                    task = "";
+                    isTaskPhase = false;
+                    Console.WriteLine($"After MoveMade: IsTaskPhase={isTaskPhase}, SelectedRow={selectedRow}, SelectedCol={selectedCol}");
+                    StateHasChanged();
+                }
+            });
+
+            hubConnection.On<string, string, string, int, int, int, int>("GameOver", (winner, result, lineType, sX, sY, eX, eY) =>
+            {
+                Console.WriteLine($"Received GameOver: winner={winner}, result={result}, lineType={lineType}, start=({sX},{sY}), end=({eX},{eY})");
+                StopTimer();
+                StopSessionTimer();
+                gameOverMessage = result == "win" ? $"Победил {winner}!" : "Ничья!";
+                if (result == "win" && lineType != null && (sX != eX || sY != eY))
+                {
+                    winLineType = lineType;
+                    startX = sX;
+                    startY = sY;
+                    endX = eX;
+                    endY = eY;
+                    Console.WriteLine($"Линия установлена: {winLineType}, от ({startX},{startY}) до ({endX},{endY})");
+                }
+                else
+                {
+                    winLineType = null;
+                    Console.WriteLine("Линия не установлена: либо ничья, либо некорректные координаты.");
+                }
                 task = "";
                 feedback = "";
                 selectedRow = -1;
                 selectedCol = -1;
                 isTaskPhase = false;
-                sessionTimerSeconds = 15 * 60; // Сбрасываем локальный таймер
-                StartSessionTimer();
-                StartTimer();
                 StateHasChanged();
-            }
-        });
+            });
 
-        hubConnection.On<string>("TaskFeedback", (message) =>
-        {
-            Console.WriteLine($"Received TaskFeedback: {message}");
-            feedback = message;
-            StateHasChanged();
-            _ = Task.Delay(2000).ContinueWith(_ => { feedback = ""; StateHasChanged(); });
-        });
+            hubConnection.On<string, char[][], string>("GameReset", (id, newBoard, newCurrentPlayer) =>
+            {
+                Console.WriteLine($"Received GameReset: {id}");
+                if (gameId == id)
+                {
+                    board = newBoard;
+                    currentPlayer = newCurrentPlayer;
+                    gameOverMessage = null;
+                    winLineType = null;
+                    errorMessage = "";
+                    task = "";
+                    feedback = "";
+                    selectedRow = -1;
+                    selectedCol = -1;
+                    isTaskPhase = false;
+                    sessionTimerSeconds = 15 * 60;
+                    StartSessionTimer();
+                    StartTimer();
+                    StateHasChanged();
+                }
+            });
 
-        try
-        {
+            hubConnection.On<string>("TaskFeedback", (message) =>
+            {
+                Console.WriteLine($"Received TaskFeedback: {message}");
+                feedback = message;
+                StateHasChanged();
+                _ = Task.Delay(2000).ContinueWith(_ => { feedback = ""; StateHasChanged(); });
+            });
+
             Console.WriteLine("Starting connection...");
             await hubConnection.StartAsync();
             Console.WriteLine("Connection started");
             connected = true;
-            Console.WriteLine($"Joining game with {username}, {difficulty}, {lineLength}");
-            await hubConnection.SendAsync("JoinGame", username, difficulty, lineLength);
+            retryCount = 0;
+            Console.WriteLine($"Joining game with {currentUsername}, {difficulty}, {lineLength}");
+            await hubConnection.SendAsync("JoinGame", currentUsername, difficulty, lineLength);
             Console.WriteLine("Sent JoinGame request");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Connection failed: {ex.Message}");
-            errorMessage = $"Ошибка подключения: {ex.Message}";
-            connected = false;
+            if (ex.Message.Contains("401"))
+            {
+                Console.WriteLine("Connect: 401 error detected, attempting to refresh token");
+                await RefreshToken();
+                if (!isAuthenticated)
+                {
+                    Console.WriteLine("Connect: Refresh failed, user not authenticated, redirecting to login");
+                    return;
+                }
+
+                retryCount++;
+                if (retryCount >= maxRetryAttempts)
+                {
+                    errorMessage = "Превышено количество попыток подключения. Проверьте сервер и попробуйте снова.";
+                    Console.WriteLine("Connect: Max retry attempts reached.");
+                    await Logout();
+                    return;
+                }
+
+                Console.WriteLine($"Connect: Retrying connection after token refresh (attempt {retryCount}/{maxRetryAttempts})...");
+                // Убираем рекурсивный вызов Connect, вместо этого пробуем снова в рамках текущего метода
+                if (hubConnection != null)
+                {
+                    await hubConnection.StopAsync();
+                    hubConnection = null;
+                }
+
+                hubConnection = new HubConnectionBuilder()
+                    .WithUrl("https://26.171.188.146:5001/gameHub", options =>
+                    {
+                        options.Headers["Authorization"] = $"Bearer {accessToken}";
+                    })
+                    .WithAutomaticReconnect()
+                    .Build();
+
+                try
+                {
+                    Console.WriteLine("Retrying connection...");
+                    await hubConnection.StartAsync();
+                    Console.WriteLine("Connection started after retry");
+                    connected = true;
+                    Console.WriteLine($"Joining game with {currentUsername}, {difficulty}, {lineLength}");
+                    await hubConnection.SendAsync("JoinGame", currentUsername, difficulty, lineLength);
+                    Console.WriteLine("Sent JoinGame request after retry");
+                }
+                catch (Exception retryEx)
+                {
+                    Console.WriteLine($"Retry failed: {retryEx.Message}");
+                    errorMessage = $"Не удалось подключиться после {retryCount} попыток: {retryEx.Message}";
+                    if (retryCount >= maxRetryAttempts)
+                    {
+                        await Logout();
+                    }
+                }
+            }
+            else if (ex.Message.Contains("500"))
+            {
+                errorMessage = "Ошибка на сервере при подключении. Проверьте API-сервер.";
+                Console.WriteLine("Connect: Server error during connection (500)");
+                await Logout();
+            }
+            else
+            {
+                errorMessage = $"Ошибка подключения: {ex.Message}. Проверьте, запущен ли сервер.";
+                connected = false;
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            isConnecting = false;
             StateHasChanged();
         }
     }
 
     private async Task MakeMove(int row, int col)
     {
-        if (hubConnection == null || gameId == null || (currentPlayer != username && !string.IsNullOrEmpty(task))) return;
+        if (hubConnection == null || gameId == null || (currentPlayer != currentUsername && !string.IsNullOrEmpty(task))) return;
         try
         {
-            Console.WriteLine($"Making move: {row}, {col}, Username={username}, CurrentPlayer={currentPlayer}, Task={task}");
+            Console.WriteLine($"Making move: {row}, {col}, Username={currentUsername}, CurrentPlayer={currentPlayer}, Task={task}");
             selectedRow = row;
             selectedCol = col;
-            await hubConnection.SendAsync("MakeMove", gameId, username, row, col);
+            await hubConnection.SendAsync("MakeMove", gameId, currentUsername, row, col);
             Console.WriteLine("Sent MakeMove request");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"MakeMove failed: {ex.Message}");
             errorMessage = $"Ошибка хода: {ex.Message}";
+            if (ex.Message.Contains("401"))
+            {
+                Console.WriteLine("MakeMove: 401 error detected, refreshing token");
+                await RefreshToken();
+                if (!isAuthenticated)
+                {
+                    Console.WriteLine("MakeMove: Refresh failed, redirecting to login");
+                    return;
+                }
+                if (retryCount >= maxRetryAttempts)
+                {
+                    errorMessage = "Превышено количество попыток выполнения хода. Проверьте сервер и попробуйте снова.";
+                    Console.WriteLine("MakeMove: Max retry attempts reached.");
+                    await Logout();
+                    return;
+                }
+                retryCount++;
+                try
+                {
+                    Console.WriteLine($"MakeMove: Retrying move after token refresh (attempt {retryCount}/{maxRetryAttempts})...");
+                    await hubConnection.SendAsync("MakeMove", gameId, currentUsername, row, col);
+                    Console.WriteLine("Sent MakeMove request after retry");
+                }
+                catch (Exception retryEx)
+                {
+                    Console.WriteLine($"MakeMove retry failed: {retryEx.Message}");
+                    errorMessage = $"Повторный ход не удался: {retryEx.Message}";
+                    await Logout();
+                }
+            }
+            else if (ex.Message.Contains("500"))
+            {
+                errorMessage = "Ошибка на сервере при выполнении хода. Проверьте API-сервер.";
+                Console.WriteLine("MakeMove: Server error during move (500)");
+                await Logout();
+            }
             StateHasChanged();
         }
     }
@@ -301,8 +675,8 @@ else
         if (hubConnection == null || gameId == null || string.IsNullOrEmpty(task) || selectedRow < 0 || selectedCol < 0) return;
         try
         {
-            Console.WriteLine($"Submitting answer: {answer}, Username={username}");
-            await hubConnection.SendAsync("SubmitAnswer", gameId, username, answer);
+            Console.WriteLine($"Submitting answer: {answer}, Username={currentUsername}");
+            await hubConnection.SendAsync("SubmitAnswer", gameId, currentUsername, answer);
             answer = "";
             Console.WriteLine("Sent SubmitAnswer request");
         }
@@ -310,6 +684,43 @@ else
         {
             Console.WriteLine($"SubmitAnswer failed: {ex.Message}");
             errorMessage = $"Ошибка отправки ответа: {ex.Message}";
+            if (ex.Message.Contains("401"))
+            {
+                Console.WriteLine("SubmitAnswer: 401 error detected, refreshing token");
+                await RefreshToken();
+                if (!isAuthenticated)
+                {
+                    Console.WriteLine("SubmitAnswer: Refresh failed, redirecting to login");
+                    return;
+                }
+                if (retryCount >= maxRetryAttempts)
+                {
+                    errorMessage = "Превышено количество попыток отправки ответа. Проверьте сервер и попробуйте снова.";
+                    Console.WriteLine("SubmitAnswer: Max retry attempts reached.");
+                    await Logout();
+                    return;
+                }
+                retryCount++;
+                try
+                {
+                    Console.WriteLine($"SubmitAnswer: Retrying submit answer after token refresh (attempt {retryCount}/{maxRetryAttempts})...");
+                    await hubConnection.SendAsync("SubmitAnswer", gameId, currentUsername, answer);
+                    answer = "";
+                    Console.WriteLine("Sent SubmitAnswer request after retry");
+                }
+                catch (Exception retryEx)
+                {
+                    Console.WriteLine($"SubmitAnswer retry failed: {retryEx.Message}");
+                    errorMessage = $"Повторная отправка ответа не удалась: {retryEx.Message}";
+                    await Logout();
+                }
+            }
+            else if (ex.Message.Contains("500"))
+            {
+                errorMessage = "Ошибка на сервере при отправке ответа. Проверьте API-сервер.";
+                Console.WriteLine("SubmitAnswer: Server error during submit (500)");
+                await Logout();
+            }
             StateHasChanged();
         }
     }
@@ -321,12 +732,6 @@ else
         Console.WriteLine("ResetGame called: Starting reset process...");
         try
         {
-            // Сохраняем параметры текущей игры
-            var currentUsername = username;
-            var currentDifficulty = difficulty;
-            var currentLineLength = lineLength;
-
-            // Останавливаем текущие таймеры и очищаем состояние
             StopTimer();
             StopSessionTimer();
             gameOverMessage = null;
@@ -340,16 +745,12 @@ else
             board = new char[0][];
             sessionTimerSeconds = 15 * 60;
 
-            // Переподключаемся, как при новой игре
             await hubConnection.StopAsync();
             hubConnection = null;
             connected = false;
             isWaiting = false;
+            retryCount = 0;
 
-            // Восстанавливаем параметры и подключаемся заново
-            username = currentUsername;
-            difficulty = currentDifficulty;
-            lineLength = currentLineLength;
             await Connect();
 
             Console.WriteLine("ResetGame completed: Game restarted.");
@@ -358,6 +759,17 @@ else
         {
             Console.WriteLine($"ResetGame failed: {ex.Message}");
             errorMessage = $"Ошибка при реванше: {ex.Message}";
+            if (ex.Message.Contains("401"))
+            {
+                Console.WriteLine("ResetGame: 401 error detected, refreshing token");
+                await RefreshToken();
+            }
+            else if (ex.Message.Contains("500"))
+            {
+                errorMessage = "Ошибка на сервере при реванше. Проверьте API-сервер.";
+                Console.WriteLine("ResetGame: Server error during reset (500)");
+                await Logout();
+            }
             StateHasChanged();
         }
     }
@@ -388,6 +800,7 @@ else
             selectedCol = -1;
             isTaskPhase = false;
             sessionTimerSeconds = 15 * 60;
+            retryCount = 0;
             StateHasChanged();
         }
     }
@@ -402,15 +815,15 @@ else
             if (timerSeconds <= 0)
             {
                 StopTimer();
-                if (hubConnection != null && gameId != null && currentPlayer == username)
+                if (hubConnection != null && gameId != null && currentPlayer == currentUsername)
                 {
                     if (isTaskPhase)
                     {
-                        _ = Task.Run(async () => await hubConnection.SendAsync("PassTurn", gameId, username));
+                        _ = Task.Run(async () => await hubConnection.SendAsync("PassTurn", gameId, currentUsername));
                     }
                     else
                     {
-                        _ = Task.Run(async () => await hubConnection.SendAsync("PassTurn", gameId, username));
+                        _ = Task.Run(async () => await hubConnection.SendAsync("PassTurn", gameId, currentUsername));
                     }
                 }
             }
@@ -440,7 +853,7 @@ else
                 StopSessionTimer();
                 if (hubConnection != null && gameId != null)
                 {
-                    _ = Task.Run(async () => await hubConnection.SendAsync("PassTurn", gameId, username));
+                    _ = Task.Run(async () => await hubConnection.SendAsync("PassTurn", gameId, currentUsername));
                 }
             }
             InvokeAsync(StateHasChanged);
@@ -475,5 +888,23 @@ else
             Console.WriteLine("Disposing connection...");
             await hubConnection.DisposeAsync();
         }
+    }
+
+    public class RefreshTokenRequest
+    {
+        public string AccessToken { get; set; }
+        public string RefreshToken { get; set; }
+    }
+
+    public class RefreshTokenResponse
+    {
+        public string AccessToken { get; set; }
+        public string RefreshToken { get; set; }
+    }
+
+    public class ValidateTokenResponse
+    {
+        public int UserId { get; set; }
+        public string Username { get; set; }
     }
 }
