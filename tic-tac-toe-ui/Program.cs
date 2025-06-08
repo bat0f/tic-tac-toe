@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
+using MudBlazor.Services;
 using System;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -28,6 +29,8 @@ namespace tic_tac_toe_ui
             {
                 BaseAddress = new Uri("https://26.171.188.146:5001/")
             });
+
+            builder.Services.AddMudServices();
 
             // Настраиваем SignalR с передачей токена
             builder.Services.AddScoped(sp =>

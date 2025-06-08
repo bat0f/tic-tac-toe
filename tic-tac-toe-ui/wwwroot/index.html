@@ -10,6 +10,8 @@
     <link rel="stylesheet" href="css/app.css" />
     <link rel="icon" type="image/png" href="favicon.png" />
     <link href="tic-tac-toe-ui.styles.css" rel="stylesheet" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
 </head>
 
 <body>
@@ -20,13 +22,8 @@
         </svg>
         <div class="loading-progress-text"></div>
     </div>
-
-    <div id="blazor-error-ui">
-        An unhandled error has occurred.
-        <a href="" class="reload">Reload</a>
-        <a class="dismiss">🗙</a>
-    </div>
     <script src="_framework/blazor.webassembly.js"></script>
+    <script src="_content/MudBlazor/MudBlazor.min.js" defer onload="console.log('MudBlazor.js loaded'); if (typeof MudBlazor !== 'undefined' && typeof MudBlazor.init === 'function') { MudBlazor.init(); console.log('MudBlazor initialized'); } else { console.log('MudBlazor init function missing'); }"></script>
 </body>
 
 </html>
