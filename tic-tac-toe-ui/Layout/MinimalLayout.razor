@@ -1,0 +1,16 @@
+﻿@using MudBlazor
+@inherits LayoutComponentBase
+
+<MudThemeProvider @bind-IsDarkMode="@_isDarkMode" Theme="@_theme" />
+<MudDialogProvider />
+<MudSnackbarProvider />
+<MudPopoverProvider />
+
+<div style="min-height: 100vh; width: 100%; background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);">
+    @Body
+</div>
+
+@code {
+    private bool _isDarkMode;
+    private MudTheme _theme = new MudTheme();
+}

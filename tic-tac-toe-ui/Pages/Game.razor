@@ -1,121 +1,268 @@
 ﻿@page "/game"
+@layout MinimalLayout
 @using Microsoft.AspNetCore.SignalR.Client
 @using System.Timers
 @using System.Globalization
 @using System.Net.Http.Json
 @using tic_tac_toe_ui.Models
+@using tic_tac_toe_ui.Layout
+@using MudBlazor
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
 @inject NavigationManager Navigation
 
-<h3>Крестики-нолики с задачами</h3>
+<MudContainer Class="py-8">
+    <MudCard Elevation="4" Class="pa-6" Style="background: rgba(255, 255, 255, 0.95); border-radius: 16px;">
+        <MudCardContent>
+            <MudText Typo="Typo.h5" Align="Align.Center" Color="Color.Primary" Class="mb-6">
+                Крестики-нолики с задачами
+            </MudText>
 
-@if (!isAuthenticated)
-{
-    <p>Вы не авторизованы. Пожалуйста, <a href="/login">войдите</a> или <a href="/register">зарегистрируйтесь</a>.</p>
-}
-else
-{
-    <p>Вы вошли как: @currentUsername</p>
-    <button @onclick="Logout">Выйти</button>
-
-    @if (!connected)
-    {
-        <p>Выберите параметры игры:</p>
-        <select @bind="difficulty">
-            <option value="easy">Лёгкий</option>
-            <option value="medium">Средний</option>
-            <option value="hard">Сложный</option>
-        </select>
-        <select @bind="lineLength">
-            <option value="3">3x3</option>
-            <option value="4">4x4</option>
-            <option value="5">5x5</option>
-        </select>
-        <button @onclick="Connect" disabled="@isConnecting">Присоединиться</button>
-        @if (isConnecting)
-        {
-            <p>Подключение...</p>
-        }
-    }
-    else if (isWaiting)
-    {
-        <p>Ожидание второго игрока...</p>
-    }
-    else if (gameOverMessage != null)
-    {
-        <p>@gameOverMessage</p>
-        <div style="position: relative; width: @(boardSize * 105)px; height: @(boardSize * 105)px;">
-            <div style="display: grid; grid-template-columns: repeat(@boardSize, 100px); gap: 5px; width: @(boardSize * 105)px;">
-                @for (int i = 0; i < boardSize; i++)
-                {
-                    for (int j = 0; j < boardSize; j++)
-                    {
-                        var row = i;
-                        var col = j;
-                        <button style="width: 100px; height: 100px; font-size: 24px;" disabled="true">
-                            @(board[i][j] == '\0' ? "" : board[i][j].ToString())
-                        </button>
-                    }
-                }
-            </div>
-            @if (winLineType != null && (startX != endX || startY != endY))
+            @if (!isAuthenticated)
             {
-                <svg style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;">
-                    <line x1="@((startY * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
-                          y1="@((startX * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
-                          x2="@((endY * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
-                          y2="@((endX * 105 + 52.5).ToString("F1", CultureInfo.InvariantCulture))"
-                          stroke="red" stroke-width="5" stroke-linecap="round" />
-                </svg>
+                <MudText Align="Align.Center" Class="mb-4">
+                    Вы не авторизованы.
+                </MudText>
+                <MudGrid Justify="Justify.Center">
+                    <MudItem>
+                        <MudButton Href="/login" Variant="Variant.Filled" Color="Color.Primary" Class="mx-2" StartIcon="@Icons.Material.Filled.Login">
+                            Войти
+                        </MudButton>
+                    </MudItem>
+                    <MudItem>
+                        <MudButton Href="/register" Variant="Variant.Outlined" Color="Color.Secondary" Class="mx-2" StartIcon="@Icons.Material.Filled.AppRegistration">
+                            Зарегистрироваться
+                        </MudButton>
+                    </MudItem>
+                </MudGrid>
             }
             else
             {
-                <p>Отладка: winLineType=@winLineType, startX=@startX, startY=@startY, endX=@endX, endY=@endY</p>
-            }
-        </div>
-        <button @onclick="ResetGame">Реванш</button>
-        <button @onclick="ReturnToMainMenu">Вернуться в главное меню</button>
-    }
-    else
-    {
-        <p>Вы играете за: @playerSymbol</p>
-        <p>Ход игрока: @currentPlayer (Осталось: @timerSeconds с)</p>
-        <p>Осталось до конца сессии: @((sessionTimerSeconds / 60)) мин @((sessionTimerSeconds % 60)) с</p>
-        @if (!string.IsNullOrEmpty(feedback))
-        {
-            <p id="feedback" style="color: @(feedback.Contains("Правильно") ? "green" : "red");">@feedback</p>
-        }
-        @if (!string.IsNullOrEmpty(task) && selectedRow >= 0 && selectedCol >= 0 && currentPlayer == currentUsername)
-        {
-            <div>
-                <p>Задача: @task</p>
-                <input @bind="answer" placeholder="Введите ответ" />
-                <button @onclick="SubmitAnswer">Отправить</button>
-            </div>
-        }
-        <div style="display: grid; grid-template-columns: repeat(@boardSize, 100px); gap: 5px; width: @(boardSize * 105)px;">
-            @for (int i = 0; i < boardSize; i++)
-            {
-                for (int j = 0; j < boardSize; j++)
+                <MudGrid Justify="Justify.SpaceBetween" Class="mb-4">
+                    <MudItem>
+                        <MudText>Вы вошли как: <strong>@currentUsername</strong></MudText>
+                    </MudItem>
+                    <MudItem>
+                        <MudButton OnClick="Logout" Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.ExitToApp">
+                            Выйти
+                        </MudButton>
+                    </MudItem>
+                </MudGrid>
+
+                @if (!connected)
                 {
-                    var row = i;
-                    var col = j;
-                    <button style="width: 100px; height: 100px; font-size: 24px;"
-                            disabled="@(currentPlayer != currentUsername || board[i][j] != '\0' || gameOverMessage != null || (!string.IsNullOrEmpty(task) && (selectedRow >= 0 || selectedCol >= 0)))"
-                            @onclick="() => MakeMove(row, col)">
-                        @(board[i][j] == '\0' ? "" : board[i][j].ToString())
-                    </button>
+                    <MudText Class="mb-4">Выберите параметры игры:</MudText>
+                    <MudGrid>
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="string" Label="Сложность" @bind-Value="difficulty" Variant="Variant.Outlined" Dense="true">
+                                <MudSelectItem Value="@("easy")">Лёгкий</MudSelectItem>
+                                <MudSelectItem Value="@("medium")">Средний</MudSelectItem>
+                                <MudSelectItem Value="@("hard")">Сложный</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="int" Label="Размер поля" @bind-Value="lineLength" Variant="Variant.Outlined" Dense="true">
+                                <MudSelectItem Value="3">3x3</MudSelectItem>
+                                <MudSelectItem Value="4">4x4</MudSelectItem>
+                                <MudSelectItem Value="5">5x5</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" Class="mt-4">
+                            <MudButton OnClick="Connect" Disabled="isConnecting" Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" StartIcon="@Icons.Material.Filled.PlayArrow">
+                                Присоединиться
+                            </MudButton>
+                            @if (isConnecting)
+                            {
+                                <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true" Class="mt-2" />
+                            }
+                        </MudItem>
+                    </MudGrid>
+                }
+                else if (isWaiting)
+                {
+                    <MudText Align="Align.Center" Class="mb-4">
+                        Ожидание второго игрока...
+                    </MudText>
+                    <MudProgressLinear Color="Color.Secondary" Indeterminate="true" />
+                }
+                else if (gameOverMessage != null)
+                {
+                    <MudText Align="Align.Center" Color="Color.Success" Class="mb-4">
+                        @gameOverMessage
+                    </MudText>
+
+                    @if (board != null && board.Length == boardSize && board.All(row => row != null && row.Length == boardSize))
+                    {
+                        int cellSize = 60;
+                        int boardWidth = boardSize * cellSize;
+                        int boardHeight = boardSize * cellSize;
+
+                        string CenterCoord(int index) =>
+                        (index * cellSize + cellSize / 2.0).ToString("F1", CultureInfo.InvariantCulture);
+
+                        <div style="position: relative; width: @(boardWidth)px; height: @(boardHeight)px; margin: 0 auto;">
+                            <div class="board-grid"
+                                 style="display: grid; grid-template-columns: repeat(@boardSize, 1fr); gap: 6px;">
+                                @for (int i = 0; i < boardSize; i++)
+                                {
+                                    for (int j = 0; j < boardSize; j++)
+                                    {
+                                        if (i < board.Length && board[i] != null && j < board[i].Length)
+                                        {
+                                            char symbol = board[i][j];
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Default"
+                                                       Disabled="true"
+                                                       Style="@($"width: {cellSize}px; height: {cellSize}px; font-size: 24px; font-weight: bold;")"
+                                                       Class="d-flex align-center justify-center">
+                                                @(symbol == '\0' ? "" : symbol.ToString())
+                                            </MudButton>
+                                        }
+                                        else
+                                        {
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Error"
+                                                       Disabled="true"
+                                                       Style="@($"width: {cellSize}px; height: {cellSize}px; font-size: 24px; font-weight: bold;")"
+                                                       Class="d-flex align-center justify-center">
+                                                ?
+                                            </MudButton>
+                                        }
+                                    }
+                                }
+
+                            </div>
+                            @if (winLineType != null
+                           && startX >= 0 && startX < boardSize
+                           && endX >= 0 && endX < boardSize
+                           && startY >= 0 && startY < boardSize
+                           && endY >= 0 && endY < boardSize
+                           && (startX != endX || startY != endY))
+                            {
+                                <svg style="position: absolute; top: 0; left: 0; width: @(boardWidth)px; height: @(boardHeight)px; pointer-events: none;">
+                                    <line x1="@CenterCoord(startY)"
+                                          y1="@CenterCoord(startX)"
+                                          x2="@CenterCoord(endY)"
+                                          y2="@CenterCoord(endX)"
+                                          stroke="#ef4444"
+                                          stroke-width="6"
+                                          stroke-linecap="round" />
+                                </svg>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- ?? Отладка: в бою убери -->
+                        @if (board == null)
+                        {
+                            <MudText Color="Color.Error">board is null</MudText>
+                        }
+                        else if (board.Length != boardSize)
+                        {
+                            <MudText Color="Color.Error">board.Length != boardSize (@board.Length != @boardSize)</MudText>
+                        }
+                        else if (!board.All(row => row != null && row.Length == boardSize))
+                        {
+                            <MudText Color="Color.Error">Некоторые строки null или неправильной длины</MudText>
+                        }
+                        else
+                        {
+                            <MudText Color="Color.Error">Ошибка: игровое поле не готово или повреждено</MudText>
+                        }
+                    }
+
+                    <MudGrid Justify="Justify.Center" Class="mt-4">
+                        <MudItem>
+                            <MudButton OnClick="ResetGame"
+                                       Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       Class="mx-2"
+                                       StartIcon="@Icons.Material.Filled.Refresh">
+                                Реванш
+                            </MudButton>
+                        </MudItem>
+                        <MudItem>
+                            <MudButton OnClick="ReturnToMainMenu"
+                                       Variant="Variant.Outlined"
+                                       Color="Color.Secondary"
+                                       Class="mx-2"
+                                       StartIcon="@Icons.Material.Filled.Home">
+                                Вернуться в главное меню
+                            </MudButton>
+                        </MudItem>
+                    </MudGrid>
+                }
+
+                else
+                {
+                    <MudText Class="mb-2">Вы играете за: <strong>@playerSymbol</strong></MudText>
+                    <MudText Class="mb-2">Ход игрока: <strong>@currentPlayer</strong> (Осталось: @timerSeconds с)</MudText>
+                    <MudText Class="mb-4">Осталось до конца сессии: @((sessionTimerSeconds / 60)) мин @((sessionTimerSeconds % 60)) с</MudText>
+
+                    @if (!string.IsNullOrEmpty(feedback))
+                    {
+                        <MudAlert Severity="@(feedback.Contains("Правильно") ? MudBlazor.Severity.Success : MudBlazor.Severity.Error)" Class="mb-4">
+                            @feedback
+                        </MudAlert>
+                    }
+
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <MudAlert Severity="MudBlazor.Severity.Error" Class="mb-4">
+                            @errorMessage
+                        </MudAlert>
+                    }
+
+                    @if (!string.IsNullOrEmpty(task) && selectedRow >= 0 && selectedCol >= 0 && board != null && selectedRow < board.Length && board[selectedRow] != null && selectedCol < board[selectedRow].Length && currentPlayer == currentUsername)
+                    {
+                        <MudPaper Elevation="2" Class="pa-4 mb-4">
+                            <MudText Class="mb-2">Задача: @task</MudText>
+                            <MudTextField @bind-Value="answer" Label="Введите ответ" Variant="Variant.Outlined" Class="mb-2" />
+                            <MudButton OnClick="SubmitAnswer" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Send">
+                                Отправить
+                            </MudButton>
+                        </MudPaper>
+                    }
+
+                    <div style="position: relative; margin: 0 auto;">
+                        @if (board != null && board.Length > 0 && board.All(row => row != null && row.Length == board.Length))
+                        {
+                            <div class="board-grid" style="display: grid; grid-template-columns: repeat(@boardSize, 1fr); gap: 6px; max-width: fit-content; margin: 0 auto;">
+                                @for (int i = 0; i < boardSize; i++)
+                                {
+                                    for (int j = 0; j < boardSize; j++)
+                                    {
+                                        var rowIndex = i;
+                                        var colIndex = j;
+                                        <MudButton Variant="Variant.Filled" Color="Color.Default"
+                                                   Disabled="@(currentPlayer != currentUsername || board[rowIndex][colIndex] != '\0' || gameOverMessage != null || (!string.IsNullOrEmpty(task) && (selectedRow >= 0 || selectedCol >= 0)))"
+                                                   OnClick="() => MakeMove(rowIndex, colIndex)"
+                                                   Style="width: 60px; height: 60px; font-size: 24px; font-weight: bold;"
+                                                   Class="d-flex align-center justify-center mud-hover">
+                                            @(board[rowIndex][colIndex] == '\0' ? "" : board[rowIndex][colIndex].ToString())
+                                        </MudButton>
+                                    }
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <MudText Color="Color.Error">Ошибка: игровое поле не инициализировано или имеет некорректный размер</MudText>
+                        }
+                    </div>
+                }
+
+                @if (!string.IsNullOrEmpty(errorMessage))
+                {
+                    <MudAlert Severity="MudBlazor.Severity.Error" Class="mt-4">
+                        @errorMessage
+                    </MudAlert>
                 }
             }
-        </div>
-    }
-
-    @if (!string.IsNullOrEmpty(errorMessage))
-    {
-        <p style="color: red;">@errorMessage</p>
-    }
-}
+        </MudCardContent>
+    </MudCard>
+</MudContainer>
 
 @code {
     private HubConnection? hubConnection;
@@ -128,7 +275,7 @@ else
     private int lineLength = 3;
     private bool connected = false;
     private bool isWaiting = false;
-    private bool isConnecting = false; // Добавляем флаг для предотвращения повторного нажатия
+    private bool isConnecting = false;
     private string? playerSymbol;
     private string? currentPlayer;
     private string? gameId;
@@ -152,6 +299,7 @@ else
     private int startX, startY, endX, endY;
     private int maxRetryAttempts = 3;
     private int retryCount = 0;
+
 
     protected override async Task OnInitializedAsync()
     {
@@ -418,42 +566,61 @@ else
             });
 
             hubConnection.On<string, string, string, Dictionary<string, char>>("GameStarted", (id, p1, p2, symbolMap) =>
-            {
-                Console.WriteLine($"Received GameStarted: {id}, {p1}, {p2}");
-                isWaiting = false;
-                gameId = id;
-                player1 = p1;
-                player2 = p2;
-                playerSymbol = symbolMap[currentUsername].ToString();
-                currentPlayer = p1;
-                boardSize = lineLength == 3 ? 6 : lineLength == 4 ? 8 : 10;
-                board = CreateEmptyBoard(boardSize);
-                StartTimer();
-                StartSessionTimer();
-                gameOverMessage = null;
-                winLineType = null;
-                errorMessage = "";
-                retryCount = 0;
-                StateHasChanged();
-            });
+    {
+        Console.WriteLine($"Received GameStarted: {id}, {p1}, {p2}");
+        isWaiting = false;
+        gameId = id;
+        player1 = p1;
+        player2 = p2;
+        playerSymbol = symbolMap[currentUsername].ToString();
+        currentPlayer = p1;
+        boardSize = lineLength; // Исправлено: 3, 4 или 5 вместо 6, 8, 10
+        board = CreateEmptyBoard(boardSize);
+        StartTimer();
+        StartSessionTimer();
+        gameOverMessage = null;
+        winLineType = null;
+        errorMessage = "";
+        retryCount = 0;
+        StateHasChanged();
+    });
 
             hubConnection.On<char[][], string, int, string>("UpdateState", (newBoard, newCurrentPlayer, remainingTime, newTask) =>
+    {
+        Console.WriteLine($"Received UpdateState: Board={(newBoard != null ? newBoard.Length : "null")}, CurrentPlayer={newCurrentPlayer}, Time={remainingTime}, Task={newTask}, Username={currentUsername}");
+
+        if (newBoard != null && newBoard.Length > 0 && newBoard.All(row => row != null && row.Length == newBoard.Length))
+        {
+            // Создаём копию board для защиты от асинхронных изменений
+            var boardCopy = new char[newBoard.Length][];
+            for (int i = 0; i < newBoard.Length; i++)
             {
-                Console.WriteLine($"Received UpdateState: Board={newBoard.Length}, CurrentPlayer={newCurrentPlayer}, Time={remainingTime}, Task={newTask}, Username={currentUsername}");
-                board = newBoard;
-                currentPlayer = newCurrentPlayer;
-                timerSeconds = remainingTime;
-                task = newTask;
-                isTaskPhase = !string.IsNullOrEmpty(newTask);
-                if (!isTaskPhase)
-                {
-                    selectedRow = -1;
-                    selectedCol = -1;
-                }
-                Console.WriteLine($"After UpdateState: CurrentPlayer={currentPlayer}, IsTaskPhase={isTaskPhase}, SelectedRow={selectedRow}, SelectedCol={selectedCol}");
-                StartTimer();
-                StateHasChanged();
-            });
+                boardCopy[i] = new char[newBoard[i].Length];
+                Array.Copy(newBoard[i], boardCopy[i], newBoard[i].Length);
+            }
+            board = boardCopy;
+            boardSize = newBoard.Length;
+            Console.WriteLine($"Board validated: Size={boardSize}, Rows={string.Join(", ", Enumerable.Range(0, board.Length).Select(i => $"Row {i}: Length={board[i].Length}"))}");
+        }
+        else
+        {
+            Console.WriteLine("UpdateState: Invalid or empty board received");
+            errorMessage = "Ошибка: сервер отправил некорректное игровое поле";
+        }
+
+        currentPlayer = newCurrentPlayer;
+        timerSeconds = remainingTime;
+        task = newTask;
+        isTaskPhase = !string.IsNullOrEmpty(newTask);
+        if (!isTaskPhase)
+        {
+            selectedRow = -1;
+            selectedCol = -1;
+        }
+        Console.WriteLine($"After UpdateState: boardSize={boardSize}, CurrentPlayer={currentPlayer}, IsTaskPhase={isTaskPhase}, SelectedRow={selectedRow}, SelectedCol={selectedCol}, BoardLength={(board != null ? board.Length : "null")}");
+        StartTimer();
+        StateHasChanged();
+    });
 
             hubConnection.On<string, int, int, char>("MoveMade", (player, row, col, symbol) =>
             {
@@ -483,7 +650,7 @@ else
                     startY = sY;
                     endX = eX;
                     endY = eY;
-                    Console.WriteLine($"Линия установлена: {winLineType}, от ({startX},{startY}) до ({endX},{endY})");
+                    Console.WriteLine($"Линия установлена: {winLineType}, от ({startX},{startY}) до ({endX},{eY})");
                 }
                 else
                 {
@@ -560,7 +727,6 @@ else
                 }
 
                 Console.WriteLine($"Connect: Retrying connection after token refresh (attempt {retryCount}/{maxRetryAttempts})...");
-                // Убираем рекурсивный вызов Connect, вместо этого пробуем снова в рамках текущего метода
                 if (hubConnection != null)
                 {
                     await hubConnection.StopAsync();
