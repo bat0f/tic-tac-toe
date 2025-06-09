@@ -7,7 +7,6 @@ namespace tic_tac_toe_api.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    //[Authorize] // Требуем авторизацию для всех методов
     public class GameController : ControllerBase
     {
         private static readonly ConcurrentDictionary<string, (string Username, string ConnectionId)> _waitingPlayers = new();

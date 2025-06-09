@@ -194,7 +194,7 @@ namespace tic_tac_toe_api.Hubs
             return newBoard;
         }
 
-        // Сохраняем твой чат
+        // Онлайн чат (использовался для проверки онлайна)
         public async Task SendMessage(string user, string message)
         {
             await Clients.All.SendAsync("ReceiveMessage", user, message);

@@ -85,6 +85,7 @@
                     </MudText>
                     <MudProgressLinear Color="Color.Secondary" Indeterminate="true" />
                 }
+
                 else if (gameOverMessage != null)
                 {
                     <MudText Align="Align.Center" Color="Color.Success" Class="mb-4">
@@ -94,15 +95,15 @@
                     @if (board != null && board.Length == boardSize && board.All(row => row != null && row.Length == boardSize))
                     {
                         int cellSize = 60;
-                        int boardWidth = boardSize * cellSize;
-                        int boardHeight = boardSize * cellSize;
+                        int boardWidth = boardSize * cellSize + (boardSize - 1) * 6; // Точное вычисление с gap
+                        int boardHeight = boardSize * cellSize + (boardSize - 1) * 6;
 
                         string CenterCoord(int index) =>
-                        (index * cellSize + cellSize / 2.0).ToString("F1", CultureInfo.InvariantCulture);
+                        (index * (cellSize + 6) + cellSize / 2.0).ToString("F1", CultureInfo.InvariantCulture); // Центр клетки
 
-                        <div style="position: relative; width: @(boardWidth)px; height: @(boardHeight)px; margin: 0 auto;">
+                        <div style="position: relative; width: @(boardWidth)px; height: @(boardHeight)px; margin: 0 auto; overflow: hidden;">
                             <div class="board-grid"
-                                 style="display: grid; grid-template-columns: repeat(@boardSize, 1fr); gap: 6px;">
+                                 style="display: grid; grid-template-columns: repeat(@boardSize, 60px); gap: 6px; position: relative;">
                                 @for (int i = 0; i < boardSize; i++)
                                 {
                                     for (int j = 0; j < boardSize; j++)
@@ -130,7 +131,6 @@
                                         }
                                     }
                                 }
-
                             </div>
                             @if (winLineType != null
                            && startX >= 0 && startX < boardSize
@@ -139,7 +139,7 @@
                            && endY >= 0 && endY < boardSize
                            && (startX != endX || startY != endY))
                             {
-                                <svg style="position: absolute; top: 0; left: 0; width: @(boardWidth)px; height: @(boardHeight)px; pointer-events: none;">
+                                <svg style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1;">
                                     <line x1="@CenterCoord(startY)"
                                           y1="@CenterCoord(startX)"
                                           x2="@CenterCoord(endY)"
@@ -153,7 +153,6 @@
                     }
                     else
                     {
-                        <!-- ?? Отладка: в бою убери -->
                         @if (board == null)
                         {
                             <MudText Color="Color.Error">board is null</MudText>
@@ -193,7 +192,7 @@
                         </MudItem>
                     </MudGrid>
                 }
-
+                //старое
                 else
                 {
                     <MudText Class="mb-2">Вы играете за: <strong>@playerSymbol</strong></MudText>
@@ -574,7 +573,7 @@
         player2 = p2;
         playerSymbol = symbolMap[currentUsername].ToString();
         currentPlayer = p1;
-        boardSize = lineLength; // Исправлено: 3, 4 или 5 вместо 6, 8, 10
+        boardSize = lineLength;
         board = CreateEmptyBoard(boardSize);
         StartTimer();
         StartSessionTimer();
