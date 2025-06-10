@@ -1,7 +1,5 @@
-﻿using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using System.Collections.Concurrent;
-using System.Text.Json;
 
 namespace tic_tac_toe_api.Controllers
 {

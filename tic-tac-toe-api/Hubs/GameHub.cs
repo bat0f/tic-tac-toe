@@ -1,7 +1,4 @@
 ﻿using Microsoft.AspNetCore.SignalR;
-using System.Text.RegularExpressions;
-using System.Collections.Generic;
-using System;
 using Microsoft.AspNetCore.Authorization;
 
 namespace tic_tac_toe_api.Hubs
@@ -88,8 +85,6 @@ namespace tic_tac_toe_api.Hubs
                 return;
             }
 
-            _logger.LogInformation($"Текущий игрок в игре: {session.CurrentPlayer}");
-
             if (!string.Equals(session.CurrentPlayer, username, StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogWarning($"Не ваш ход, {username}!");
@@ -113,7 +108,8 @@ namespace tic_tac_toe_api.Hubs
             session.SelectedRow = row;
             session.SelectedCol = col;
 
-            if (session.RoundMoves == 0)
+            // Генерируем задачу, если её нет или это начало нового раунда
+            if (session.RoundMoves == 0 || string.IsNullOrEmpty(session.RoundTask))
             {
                 session.RoundTask = GenerateUniqueTask(session.Difficulty, session.UsedTasks);
                 session.RoundAnswer = EvaluateTask(session.RoundTask);
@@ -245,6 +241,16 @@ namespace tic_tac_toe_api.Hubs
             session.SelectedRow = -1;
             session.SelectedCol = -1;
             session.RoundMoves++;
+
+            // Если это первый ход в раунде, генерируем новую задачу
+            if (session.RoundMoves == 1 || string.IsNullOrEmpty(session.RoundTask))
+            {
+                session.RoundTask = GenerateUniqueTask(session.Difficulty, session.UsedTasks);
+                session.RoundAnswer = EvaluateTask(session.RoundTask);
+                _logger.LogInformation($"Новая задача после пропуска: {session.RoundTask}, Ответ: {session.RoundAnswer}");
+            }
+
+            // Сбрасываем задачу и счётчик ходов, если раунд завершён
             if (session.RoundMoves >= 2)
             {
                 session.RoundTask = "";
@@ -253,7 +259,7 @@ namespace tic_tac_toe_api.Hubs
             }
 
             _logger.LogInformation($"Передаём ход: {nextPlayer}, выбор клетки");
-            await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer, 8, "");
+            await Clients.Group(gameId).SendAsync("UpdateState", session.Board, session.CurrentPlayer, 8, session.RoundTask);
         }
 
         public async Task ResetSession(string gameId)
